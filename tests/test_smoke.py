@@ -53,7 +53,11 @@ def test_version_flag_exits_zero() -> None:
     assert repository_manager.__version__ in result.stdout
 
 
-@pytest.mark.parametrize("command", ["serve", "check-config"])
-def test_unimplemented_commands_fail_loudly(command: str) -> None:
-    """Stubs must not exit 0 and imply success."""
-    assert main([command]) != 0
+def test_remaining_stub_fails_loudly() -> None:
+    """A stub must not exit 0 and imply success.
+
+    `rescan` is the last unimplemented subcommand; it arrives with M6
+    (specification.md 13.6). `serve`, `db` and `check-config` landed in M1 and
+    are covered by their own tests.
+    """
+    assert main(["rescan", "internal-apt"]) != 0

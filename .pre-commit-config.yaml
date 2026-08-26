@@ -83,9 +83,11 @@ repos:
         language: system
         files: \.html\.j2$
 
+      # Runs from the uv environment for the same reason mypy does: the hook
+      # shells out to `alembic`, which only exists in the project's venv.
       - id: alembic-heads
         name: migrations must have exactly one head
-        entry: python3 scripts/alembic_heads.py
+        entry: uv run python scripts/alembic_heads.py
         language: system
         pass_filenames: false
-        files: ^(alembic/|alembic\.ini$)
+        files: ^(src/repository_manager/migrations/|alembic\.ini$)

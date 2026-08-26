@@ -1,0 +1,86 @@
+{% extends "base.html.j2" %}
+{% block title %}{{ repository.name }} — Repository Manager{% endblock %}
+{% block content %}
+  <nav aria-label="Breadcrumb" class="breadcrumb">
+    <ol>
+      <li><a href="{{ url_for('repository_list') }}">Repositories</a></li>
+      <li aria-current="page">{{ repository.name }}</li>
+    </ol>
+  </nav>
+  <h1>{{ repository.name }}</h1>
+  {% if repository.description %}
+    <p class="lede">{{ repository.description }}</p>
+  {% endif %}
+  <h2>Details</h2>
+  <dl class="detail-list">
+    <dt>Format</dt>
+    <dd>
+      {{ repository.type.value | upper }}
+    </dd>
+    <dt>Identifier</dt>
+    <dd>
+      <code>{{ repository.slug }}</code>
+    </dd>
+    <dt>Retention</dt>
+    <dd>
+      {% if repository.retention_count == 0 %}
+        Every version is kept.
+      {% else %}
+        The newest {{ repository.retention_count }} version{{ '' if repository.retention_count == 1 else 's' }} of each package are kept.
+      {% endif %}
+    </dd>
+    <dt>Base URL</dt>
+    <dd>
+      <code>{{ public_base }}</code>
+    </dd>
+  </dl>
+  {% if repository.type.value == 'apt' %}
+    <h2>Distributions</h2>
+    {% if repository.distributions %}
+      <table class="repository-table">
+        <caption>Publication targets in this repository.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Codename</th>
+            <th scope="col">Components</th>
+            <th scope="col">Architectures</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for distribution in repository.distributions %}
+            <tr>
+              <th scope="row"><code>{{ distribution.codename }}</code></th>
+              <td>{{ distribution.components | map(attribute='name') | join(', ') or '—' }}</td>
+              <td>{{ distribution.architectures | map(attribute='name') | join(', ') or '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No distributions have been configured yet.</p>
+    {% endif %}
+  {% else %}
+    <h2>Variants</h2>
+    {% if repository.variants %}
+      <table class="repository-table">
+        <caption>Publication targets in this repository.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Variant</th>
+            <th scope="col">Architecture</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for variant in repository.variants %}
+            <tr>
+              <th scope="row"><code>{{ variant.name }}</code></th>
+              <td><code>{{ variant.arch }}</code></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No variants have been configured yet.</p>
+    {% endif %}
+  {% endif %}
+{% endblock %}

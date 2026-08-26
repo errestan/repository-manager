@@ -1,0 +1,67 @@
+{% extends "base.html.j2" %}
+{% block title %}Repositories — Repository Manager{% endblock %}
+{% block content %}
+  <h1>Repositories</h1>
+  {% if repositories %}
+    <table class="repository-table">
+      <caption>
+        {{ repositories | length }}
+        {{ "repository" if repositories | length == 1 else "repositories" }} available.
+        All are readable without signing in.
+      </caption>
+      <thead>
+        <tr>
+          <th scope="col">Name</th>
+          <th scope="col">Format</th>
+          <th scope="col">Targets</th>
+          <th scope="col">Retention</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for repository in repositories %}
+          <tr>
+            <th scope="row">
+              <a href="{{ url_for('repository_detail', slug=repository.slug) }}">{{ repository.name }}</a>
+              {% if repository.description %}
+                <span class="muted">{{ repository.description }}</span>
+              {% endif %}
+            </th>
+            <td>
+              {# Icon plus text: colour alone never carries meaning (11). #}
+              <span class="badge badge-{{ repository.type.value }}">
+                <span aria-hidden="true">{{ '⬢' if repository.type.value == 'apt' else '⬣' }}</span>
+                {{ repository.type.value | upper }}
+              </span>
+            </td>
+            <td>
+              {% if repository.type.value == 'apt' %}
+                {{ repository.distributions | map(attribute='codename') | join(', ') or '—' }}
+              {% else %}
+                {% set names = [] %}
+                {% for variant in repository.variants %}
+                  {% set _ = names.append(variant.name ~ '/' ~ variant.arch) %}
+                {% endfor %}
+                {{ names | join(", ") or '—' }}
+              {% endif %}
+            </td>
+            <td>
+              {% if repository.retention_count == 0 %}
+                All versions kept
+              {% else %}
+                Newest {{ repository.retention_count }} version{{ '' if repository.retention_count == 1 else 's' }}
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty-state">
+      <h2>No repositories yet</h2>
+      <p>
+        Once an administrator creates a repository it will be listed here, along with
+        the client configuration needed to install packages from it.
+      </p>
+    </div>
+  {% endif %}
+{% endblock %}

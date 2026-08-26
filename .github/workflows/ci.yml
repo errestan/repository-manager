@@ -139,6 +139,8 @@ jobs:
       - name: Install
         run: uv sync --all-extras --all-groups
 
+      # --with-deps pulls the system libraries the headless browser needs
+      # (libnspr4, libnss3 and friends); without them Chromium exits 127.
       - name: Install browsers
         run: uv run playwright install --with-deps chromium
 

@@ -5,8 +5,11 @@ A web interface for managing the contents of Linux package repositories (APT and
 Create repositories, upload and remove packages, and have the indices and GPG signatures
 regenerated correctly — without hand-running `apt-ftparchive` or `createrepo_c`.
 
-> **Status: pre-alpha.** The specification is complete ([`specification.md`](specification.md));
-> implementation is starting. Nothing here is usable yet.
+> **Status: pre-alpha.** The specification is complete
+> ([`specification.md`](specification.md)). **M1 (skeleton) is done**: configuration,
+> database and migrations, the accessible layout and theme, health probes, the anonymous
+> repository list, and sub-path/proxy handling. There is no authentication and no way to
+> upload a package yet — those are M2 and M3. Not usable in production.
 
 ## Features
 
@@ -35,6 +38,31 @@ provided.
 ```sh
 pip install repository-manager
 ```
+
+> Not yet published to PyPI. Until then, install from a checkout with `uv sync`.
+
+### Running it
+
+Three settings have no default and must be supplied:
+
+```sh
+export REPOMAN_ALLOWED_ROOTS=/srv/repositories   # colon-separated, like PATH
+export REPOMAN_PUBLIC_URL=https://packages.example.com
+export REPOMAN_SECRET_KEY="$(openssl rand -hex 32)"
+
+repository-manager check-config   # validate and print the resolved settings
+repository-manager db upgrade     # create or migrate the database
+repository-manager serve          # start the application
+```
+
+Migrations are never applied implicitly on start; `db upgrade` is always an explicit step.
+
+To mount under a sub-path, set `REPOMAN_ROOT_PATH=/repoman` and make `REPOMAN_PUBLIC_URL`
+end with the same prefix — the two must agree, and startup fails if they do not.
+
+If a reverse proxy sits in front, list it in `REPOMAN_TRUSTED_PROXIES` (addresses or CIDRs).
+This has **no default**: with it unset, every `X-Forwarded-*` header is ignored so that no
+client can spoof its source address.
 
 Or run the container:
 

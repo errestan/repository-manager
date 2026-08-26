@@ -1,0 +1,25 @@
+{#
+  A plain form, submitted with a real button. No JavaScript is involved, so the
+  control works identically with scripting disabled (specification.md 11).
+  The server renders the chosen theme into <html data-theme>, so there is no
+  flash of the wrong colours on first paint.
+#}
+<form class="theme-switch"
+      method="post"
+      action="{{ url_for('set_theme') }}">
+  <input type="hidden" name="next" value="{{ current_path }}">
+  <fieldset>
+    <legend>Colour theme</legend>
+    {% for option in themes %}
+      <span class="theme-option">
+        <input type="radio"
+               id="theme-{{ option }}"
+               name="theme"
+               value="{{ option }}"
+               {% if option == theme %}checked{% endif %}>
+        <label for="theme-{{ option }}">{{ option | capitalize }}</label>
+      </span>
+    {% endfor %}
+    <button type="submit">Apply</button>
+  </fieldset>
+</form>

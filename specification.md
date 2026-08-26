@@ -555,6 +555,7 @@ Key settings:
 | `REPOMAN_ROOT_PATH` | `""` | Sub-path the app is mounted at, e.g. `/repoman` |
 | `REPOMAN_TRUSTED_PROXIES` | *(unset)* | Proxy addresses/CIDRs whose `X-Forwarded-*` headers are honoured; unset = ignore them all |
 | `REPOMAN_SEND_HSTS` | `true` | Set false when the reverse proxy already sends HSTS |
+| `REPOMAN_DEV_INSECURE_COOKIES` | `false` | Accept a `http://` public URL in `production`; see §10.6 |
 | `REPOMAN_GNUPGHOME` | `./gnupg` | App-managed keyring directory |
 | `REPOMAN_LDAP_URL` | *(required)* | `ldaps://…` |
 | `REPOMAN_LDAP_BIND_MODE` | `search` | `search` or `direct` |
@@ -567,6 +568,12 @@ Key settings:
 | `REPOMAN_TOKEN_MAX_LIFETIME_DAYS` | `365` | Ceiling on token expiry |
 | `REPOMAN_LOG_FORMAT` | `json` | `json` or `console` |
 | `REPOMAN_ENV` | `production` | Guards debug features |
+
+Only `REPOMAN_ALLOWED_ROOTS`, `REPOMAN_PUBLIC_URL` and `REPOMAN_SECRET_KEY` have no default
+and are enforced from M1. The `REPOMAN_LDAP_*` settings are listed as required above because
+they are required *once authentication exists*; they are optional until M3 wires LDAP up, so
+that the M1 skeleton can run without a directory server. Promoting them to required is part
+of M3, not a later cleanup.
 
 ---
 

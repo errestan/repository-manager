@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ theme }}">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description"
+          content="{%- block description -%}Browse and manage the contents of APT and RPM package repositories.{%- endblock -%}">
+    <title>{% block title %}Repository Manager{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/app.css') }}">
+    <link rel="icon"
+          href="{{ url_for('static', path='/icon.svg') }}"
+          type="image/svg+xml">
+  </head>
+  <body>
+    {# First focusable element on every page (specification.md 11). #}
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <header class="site-header">
+      <div class="bar">
+        <p class="wordmark"><a href="{{ url_for('repository_list') }}">Repository Manager</a></p>
+        <nav aria-label="Primary">
+          <ul class="nav-list">
+            <li><a href="{{ url_for('repository_list') }}">Repositories</a></li>
+          </ul>
+        </nav>
+        {% include "partials/theme_switch.html.j2" %}
+      </div>
+    </header>
+    <main id="main-content" tabindex="-1">
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="site-footer">
+      <p>
+        Repository Manager — free software under the
+        <a href="https://www.gnu.org/licenses/gpl-3.0.html">GNU GPL v3 or later</a>.
+        Hosted packages keep their own licences.
+      </p>
+    </footer>
+  </body>
+</html>

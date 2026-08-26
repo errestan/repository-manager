@@ -1,0 +1,354 @@
+/*
+ * Repository Manager styles (specification.md 11).
+ *
+ * Colour tokens are defined three times: once for light, once for an explicit
+ * dark choice, and once for `system` under prefers-color-scheme. Every
+ * foreground/background pair is chosen to clear WCAG 2.2 AA -- 4.5:1 for text,
+ * 3:1 for UI components and focus indicators.
+ */
+
+:root {
+  --bg: #ffffff;
+  --surface: #f4f5f7;
+  --border: #767b85;
+  --text: #16181d;
+  --text-muted: #4d525c;
+  --link: #0b4fa8;
+  --link-visited: #6b2d8f;
+  --focus: #0b4fa8;
+  --focus-offset: #ffffff;
+  --badge-apt-bg: #d6e4f7;
+  --badge-apt-text: #0d3c78;
+  --badge-rpm-bg: #f7e3d6;
+  --badge-rpm-text: #7a3708;
+
+  --space: 1rem;
+  --radius: 6px;
+  --measure: 72ch;
+}
+
+html[data-theme="dark"] {
+  --bg: #14161a;
+  --surface: #1e2127;
+  --border: #767b85;
+  --text: #eceef2;
+  --text-muted: #b3b9c4;
+  --link: #85b8ff;
+  --link-visited: #d5a8f0;
+  --focus: #85b8ff;
+  --focus-offset: #14161a;
+  --badge-apt-bg: #17335c;
+  --badge-apt-text: #bcd7ff;
+  --badge-rpm-bg: #4a2409;
+  --badge-rpm-text: #f6cfae;
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-theme="system"] {
+    --bg: #14161a;
+    --surface: #1e2127;
+    --border: #767b85;
+    --text: #eceef2;
+    --text-muted: #b3b9c4;
+    --link: #85b8ff;
+    --link-visited: #d5a8f0;
+    --focus: #85b8ff;
+    --focus-offset: #14161a;
+    --badge-apt-bg: #17335c;
+    --badge-apt-text: #bcd7ff;
+    --badge-rpm-bg: #4a2409;
+    --badge-rpm-text: #f6cfae;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+a {
+  color: var(--link);
+}
+
+a:visited {
+  color: var(--link-visited);
+}
+
+/* A visible focus ring on every interactive element, at 3:1 against both the
+   component and the page behind it. */
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 5px var(--focus-offset);
+}
+
+/* Honour a reduced-motion preference rather than assuming animation is fine. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  padding: 0.75rem 1rem;
+  background: var(--bg);
+  color: var(--link);
+  border: 2px solid var(--focus);
+  border-radius: 0 0 var(--radius) 0;
+  z-index: 10;
+}
+
+.skip-link:focus {
+  left: 0;
+}
+
+.site-header {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space);
+  align-items: center;
+  justify-content: space-between;
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: var(--space);
+}
+
+.wordmark {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.wordmark a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.wordmark a:hover,
+.wordmark a:focus-visible {
+  text-decoration: underline;
+}
+
+.nav-list {
+  display: flex;
+  gap: var(--space);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+main {
+  display: block;
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: calc(var(--space) * 2) var(--space);
+}
+
+/* The skip-link target is programmatically focusable; it must not then show a
+   ring as though it were a control. */
+main:focus {
+  outline: none;
+}
+
+h1 {
+  font-size: 1.875rem;
+  line-height: 1.25;
+  margin-top: 0;
+}
+
+h2 {
+  font-size: 1.375rem;
+  line-height: 1.3;
+  margin-top: calc(var(--space) * 2);
+}
+
+.lede {
+  font-size: 1.125rem;
+  color: var(--text-muted);
+}
+
+.muted {
+  display: block;
+  font-weight: 400;
+  font-size: 0.9375rem;
+  color: var(--text-muted);
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9375em;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--space);
+}
+
+caption {
+  text-align: left;
+  color: var(--text-muted);
+  padding-bottom: 0.5rem;
+}
+
+th,
+td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+thead th {
+  background: var(--surface);
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+tbody th {
+  font-weight: 600;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-apt {
+  background: var(--badge-apt-bg);
+  color: var(--badge-apt-text);
+}
+
+.badge-rpm {
+  background: var(--badge-rpm-bg);
+  color: var(--badge-rpm-text);
+}
+
+.detail-list {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: 0.5rem var(--space);
+  margin: var(--space) 0;
+}
+
+.detail-list dt {
+  font-weight: 600;
+}
+
+.detail-list dd {
+  margin: 0;
+}
+
+.breadcrumb ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 var(--space);
+  padding: 0;
+  list-style: none;
+  font-size: 0.9375rem;
+}
+
+.breadcrumb li + li::before {
+  content: "/";
+  padding-right: 0.5rem;
+  color: var(--text-muted);
+}
+
+.empty-state {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: calc(var(--space) * 2);
+  background: var(--surface);
+}
+
+.empty-state h2 {
+  margin-top: 0;
+}
+
+.theme-switch fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.theme-switch legend {
+  padding: 0 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.theme-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.theme-switch label {
+  font-size: 0.9375rem;
+}
+
+button {
+  font: inherit;
+  font-size: 0.9375rem;
+  padding: 0.3rem 0.75rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--surface);
+}
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  margin-top: calc(var(--space) * 3);
+  padding: var(--space);
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+}
+
+.site-footer p {
+  max-width: var(--measure);
+  margin: 0 auto;
+}

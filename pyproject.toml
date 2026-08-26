@@ -146,7 +146,7 @@ module = ["repository_manager.metadata.*", "repository_manager.security.*"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["debian.*", "rpmfile.*", "ldap3.*"]
+module = ["debian.*", "rpmfile.*", "ldap3.*", "axe_playwright_python.*"]
 ignore_missing_imports = true
 
 # --------------------------------------------------------------------------- pytest
