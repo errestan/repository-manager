@@ -1,0 +1,11 @@
+{#
+  A confirmation of something that just happened, rendered after a redirect.
+
+  role="status" rather than role="alert": this is an outcome, not a problem, so
+  it should be announced politely without interrupting (specification.md 11).
+#}
+{% macro notice(message) %}
+  <div class="notice" role="status">
+    <span aria-hidden="true">✓</span> {{ message }}
+  </div>
+{% endmacro %}

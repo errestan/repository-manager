@@ -90,9 +90,13 @@ def test_detail_page_renders(client: TestClient, apt_repository: Repository) -> 
 
 
 def test_detail_shows_an_absolute_base_url(client: TestClient, apt_repository: Repository) -> None:
-    """Client snippets get copied into sources.list, so they must be absolute (13.5)."""
+    """Client snippets get copied into sources.list, so they must be absolute (13.5).
+
+    The URL is the one the *reverse proxy* serves the repository tree from
+    (4.4), not this application's page for it -- apt fetches files, not HTML.
+    """
     body = client.get("/repositories/internal").text
-    assert "https://packages.example.test/repositories/internal" in body
+    assert "https://packages.example.test/repos/internal" in body
 
 
 def test_rpm_detail_lists_variants(client: TestClient, rpm_repository: Repository) -> None:
@@ -245,3 +249,35 @@ def test_readyz_reports_a_database_failure(client: TestClient, app: FastAPI) -> 
     response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json()["checks"]["database"].startswith("error:")
+
+
+# --------------------------------------------------------------- output escaping
+
+
+def test_templates_autoescape(app: FastAPI) -> None:
+    """Jinja's default keys on the file extension and misses `.html.j2` (10.2).
+
+    Asserted on the environment as well as through a page, because the failure
+    mode is silent: every template renders, and only the escaping is missing.
+    """
+    assert app.state.templates.env.autoescape is True
+
+
+def test_a_repository_name_containing_markup_is_escaped(
+    client: TestClient, sync_session: Session, apt_repository: Repository
+) -> None:
+    apt_repository.name = "<script>alert('xss')</script>"
+    apt_repository.description = "<img src=x onerror=alert(1)>"
+    sync_session.commit()
+
+    for path in ("/", "/repositories/internal"):
+        body = client.get(path).text
+        assert "<script>alert(" not in body, path
+        assert "<img src=x" not in body, path
+        assert "&lt;script&gt;" in body, path
+
+
+def test_an_error_message_containing_markup_is_escaped(client: TestClient) -> None:
+    """Error text is derived from user input, so it is escaped like anything else."""
+    body = client.get("/repositories/%3Cscript%3E").text
+    assert "<script>" not in body

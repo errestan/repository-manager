@@ -20,13 +20,15 @@ from starlette.templating import Jinja2Templates
 from repository_manager.__about__ import __version__
 from repository_manager.config import Settings
 from repository_manager.db import create_engine, create_sessionmaker
+from repository_manager.jobs.queue import JobQueue
 from repository_manager.logging import configure_logging, get_logger
+from repository_manager.services import publishing
 from repository_manager.web.middleware import (
     ProxyHeadersMiddleware,
     RequestContextMiddleware,
     SecurityHeadersMiddleware,
 )
-from repository_manager.web.routes import health, preferences, repositories
+from repository_manager.web.routes import health, jobs, keys, preferences, repositories
 from repository_manager.web.templating import build_templates, render
 
 log = get_logger(__name__)
@@ -39,16 +41,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     engine = create_engine(settings)
     app.state.engine = engine
-    app.state.sessionmaker = create_sessionmaker(engine)
+    sessionmaker = create_sessionmaker(engine)
+    app.state.sessionmaker = sessionmaker
+
+    # The worker pool lives for exactly as long as the application (6).  Starting
+    # it here also runs restart recovery, which is what re-queues a regeneration
+    # that was interrupted by the previous shutdown.
+    queue = JobQueue(sessionmaker, settings)
+    publishing.register_handlers(queue)
+    app.state.queue = queue
+    await queue.start()
+
     log.info(
         "application started",
         version=__version__,
         root_path=settings.effective_root_path or "/",
         env=settings.env,
+        writes_open=settings.allow_unauthenticated_writes,
     )
     try:
         yield
     finally:
+        await queue.stop()
         await engine.dispose()
         log.info("application stopped")
 
@@ -83,6 +97,8 @@ def create_app(settings: Settings, *, configure_logs: bool = True) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(preferences.router)
+    app.include_router(keys.router)
+    app.include_router(jobs.router)
     app.include_router(repositories.router)
 
     _register_error_handlers(app, templates)

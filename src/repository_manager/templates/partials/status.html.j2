@@ -1,0 +1,13 @@
+{#
+  Status is carried by a word as well as a symbol, and the symbol is hidden from
+  assistive technology so it is never read as punctuation (specification.md 11).
+
+  A macro rather than an include: `job` is often a loop variable, and passing it
+  explicitly removes any doubt about what the partial can see.
+#}
+{% set JOB_SYMBOLS = {"queued": "…", "running": "▸", "succeeded": "✓", "failed": "✗", "cancelled": "⊘"} %}
+{% macro job_state(job) %}
+  <span class="state state-{{ job.state.value }}">
+    <span aria-hidden="true">{{ JOB_SYMBOLS[job.state.value] }}</span> {{ job.state.label }}
+  </span>
+{% endmacro %}

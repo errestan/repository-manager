@@ -1,0 +1,128 @@
+{#
+  Accessible form building blocks (specification.md 11).
+
+  Every field gets a real <label>, and an invalid one is marked with
+  aria-invalid and described by its error message.  Errors are also collected
+  into a summary at the top of the form: with JavaScript disabled nothing can
+  move focus for us, so the summary is placed first in the reading order and
+  each entry links to the field it came from.
+#}
+{% macro error_summary(form) %}
+  {% if form.errors %}
+    <div class="error-summary"
+         role="alert"
+         tabindex="-1"
+         id="error-summary"
+         aria-labelledby="error-summary-title">
+      <h2 id="error-summary-title">
+        {{ form.errors | length }} problem{{ '' if form.errors | length == 1 else 's' }} stopped this being saved
+      </h2>
+      <ul>
+        {% for error in form.errors %}
+          <li>
+            <a href="#field-{{ error.field }}">{{ error.message }}</a>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+{% endmacro %}
+{#
+  `described` is built as a single string because Jinja has no list mutation
+  without the `do` extension, and aria-describedby takes a space-separated list.
+#}
+{% macro _described(name, hint, message) %}
+  {{- (('hint-' ~ name if hint else '') ~ ' ' ~ ('error-' ~ name if message else '')) | trim -}}
+{% endmacro %}
+{% macro _messages(name, hint, message) %}
+  {% if hint %}
+    <p class="field-hint" id="hint-{{ name }}">{{ hint }}</p>
+  {% endif %}
+  {% if message %}
+    <p class="field-error" id="error-{{ name }}">
+      <span aria-hidden="true">✗</span> <strong>Error:</strong> {{ message }}
+    </p>
+  {% endif %}
+{% endmacro %}
+{% macro text_field(form, name, label, hint=None, required=False, type='text', autocomplete=None, placeholder=None) %}
+  {% set message = form.messages.get(name) %}
+  {% set described = _described(name, hint, message) | trim %}
+  <div class="field{{ ' field-invalid' if message else '' }}">
+    <label for="field-{{ name }}">
+      {{ label }}
+      {% if required %}<span class="required-marker">(required)</span>{% endif %}
+    </label>
+    {{ _messages(name, hint, message) }}
+    <input type="{{ type }}"
+           id="field-{{ name }}"
+           name="{{ name }}"
+           value="{{ form.value(name) }}"
+           {% if required %}required{% endif %}
+           {% if autocomplete %}autocomplete="{{ autocomplete }}"{% endif %}
+           {% if placeholder %}placeholder="{{ placeholder }}"{% endif %}
+           {% if message %}aria-invalid="true"{% endif %}
+           {% if described %}aria-describedby="{{ described }}"{% endif %}>
+  </div>
+{% endmacro %}
+{% macro textarea_field(form, name, label, hint=None, required=False, rows=6) %}
+  {% set message = form.messages.get(name) %}
+  {% set described = _described(name, hint, message) | trim %}
+  <div class="field{{ ' field-invalid' if message else '' }}">
+    <label for="field-{{ name }}">
+      {{ label }}
+      {% if required %}<span class="required-marker">(required)</span>{% endif %}
+    </label>
+    {{ _messages(name, hint, message) }}
+    <textarea id="field-{{ name }}"
+              name="{{ name }}"
+              rows="{{ rows }}"
+              {% if required %}required{% endif %}
+              {% if message %}aria-invalid="true"{% endif %}
+              {% if described %}aria-describedby="{{ described }}"{% endif %}>{{ form.value(name) }}</textarea>
+  </div>
+{% endmacro %}
+{% macro select_field(form, name, label, options, hint=None, required=False, empty_label=None) %}
+  {% set message = form.messages.get(name) %}
+  {% set described = _described(name, hint, message) | trim %}
+  <div class="field{{ ' field-invalid' if message else '' }}">
+    <label for="field-{{ name }}">
+      {{ label }}
+      {% if required %}<span class="required-marker">(required)</span>{% endif %}
+    </label>
+    {{ _messages(name, hint, message) }}
+    <select id="field-{{ name }}"
+            name="{{ name }}"
+            {% if required %}required{% endif %}
+            {% if message %}aria-invalid="true"{% endif %}
+            {% if described %}aria-describedby="{{ described }}"{% endif %}>
+      {% if empty_label %}<option value="">{{ empty_label }}</option>{% endif %}
+      {% for value, option_label in options %}
+        <option value="{{ value }}"
+                {% if form.value(name) == value | string %}selected{% endif %}>{{ option_label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+{% endmacro %}
+{#
+  A group of radios is a <fieldset>, so the question itself is announced with
+  each option rather than only the option's own label.
+#}
+{% macro radio_group(form, name, legend, options, hint=None) %}
+  {% set message = form.messages.get(name) %}
+  {% set described = _described(name, hint, message) | trim %}
+  <fieldset class="field{{ ' field-invalid' if message else '' }}"
+            {% if described %}aria-describedby="{{ described }}"{% endif %}>
+    <legend id="field-{{ name }}">{{ legend }}</legend>
+    {{ _messages(name, hint, message) }}
+    {% for value, option_label in options %}
+      <div class="radio-option">
+        <input type="radio"
+               id="field-{{ name }}-{{ value }}"
+               name="{{ name }}"
+               value="{{ value }}"
+               {% if form.value(name) == value | string %}checked{% endif %}>
+        <label for="field-{{ name }}-{{ value }}">{{ option_label }}</label>
+      </div>
+    {% endfor %}
+  </fieldset>
+{% endmacro %}

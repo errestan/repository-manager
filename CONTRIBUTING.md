@@ -4,26 +4,36 @@
 
 ```sh
 # System dependencies (Debian/Ubuntu)
-sudo apt-get install -y createrepo-c gnupg dpkg-dev apt-utils
+sudo apt-get install -y createrepo-c gnupg zstd dpkg-dev apt-utils
 
 # System dependencies (Fedora)
-sudo dnf install -y createrepo_c gnupg2 dpkg-dev
+sudo dnf install -y createrepo_c gnupg2 zstd apt
 
 # Project
-uv sync --all-extras --dev
+uv sync --all-extras --all-groups
 uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
 ```
 
-`createrepo_c` is only needed for RPM work; `dpkg-dev`/`apt-utils` are only needed to run the
-integration tests that verify generated repositories against real clients.
+`gnupg` is the only one the unit tests need — repository metadata is signed with it, and
+there is no pure-Python substitute worth trusting. `apt` (`apt-get`/`apt-cache`) is what the
+integration tests use to judge generated repositories; `createrepo_c` is the same for RPM,
+which arrives in M4. `zstd` is needed only to read packages whose control member dpkg
+compressed with it, which python-debian handles by shelling out to `unzstd`.
+
+Test packages are built in pure Python (`tests/support/debs.py`), so `dpkg-deb` is not
+required to run the suite.
+
+Note `--all-groups` rather than `--dev`: the `e2e` dependency group is separate, and
+`--dev` silently omits it.
 
 ## Running checks
 
 ```sh
 uv run pre-commit run --all-files     # everything CI's lint job runs
 uv run pytest -m "not integration and not e2e"
-uv run pytest -m integration          # needs the system dependencies above
-uv run pytest -m e2e                  # needs: uv run playwright install chromium
+uv run pytest -m integration          # needs apt-get/apt-cache on PATH
+uv run pytest -m e2e                  # needs: uv run playwright install --with-deps chromium
+REPOMAN_ROOT_PATH=/repoman uv run pytest -m e2e   # the same suite under a sub-path (AD-14)
 ```
 
 CI runs the same pre-commit hook set, so a clean local run means a clean lint job.

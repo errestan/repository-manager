@@ -127,9 +127,20 @@ class Settings(BaseSettings):
     allowed_roots: Annotated[tuple[Path, ...], NoDecode]
     gnupghome: Path = Path("./gnupg")
 
+    # -- signing -----------------------------------------------------------
+    # The domain used in a generated key's UID (4.3).  Defaults to the public
+    # URL's host, so a working key can be generated with no extra configuration.
+    key_email_domain: str | None = None
+    verify_upload_signatures: bool = False
+
     # -- external identity -------------------------------------------------
     public_url: str
     root_path: str = ""
+    # Where the *repository trees* are served from (AD-3): the application only
+    # manages their contents, a reverse proxy publishes them.  Client setup
+    # snippets are built from this, so it has to be the URL apt will fetch, not
+    # the URL of this application's own pages.
+    repository_base_url: str | None = None
     trusted_proxies: Annotated[tuple[str, ...], NoDecode] = ()
     send_hsts: bool = True
 
@@ -145,6 +156,14 @@ class Settings(BaseSettings):
     log_format: Literal["json", "console"] = "json"
     env: Literal["production", "development"] = "production"
     dev_insecure_cookies: bool = False
+
+    # Temporary, and deliberately awkward to switch on.  M2 delivers the write
+    # paths (create, upload, remove, regenerate) but M3 delivers the login that
+    # is supposed to guard them (13.6).  Rather than ship endpoints that any
+    # anonymous caller could drive, they are refused unless an operator opts in,
+    # and the opt-in is rejected outright in production.  M3 removes this
+    # setting along with the checks that read it.
+    allow_unauthenticated_writes: bool = False
 
     @classmethod
     def settings_customise_sources(
@@ -209,6 +228,18 @@ class Settings(BaseSettings):
             raise ValueError("must not contain a query string or fragment")
         return value.rstrip("/")
 
+    @field_validator("repository_base_url")
+    @classmethod
+    def _repository_base_is_absolute(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parts = urlsplit(value)
+        if parts.scheme not in {"http", "https"}:
+            raise ValueError("must start with http:// or https://")
+        if not parts.netloc:
+            raise ValueError("must include a host, e.g. https://packages.example.com/repos")
+        return value.rstrip("/")
+
     @field_validator("root_path")
     @classmethod
     def _normalise_root_path(cls, value: str) -> str:
@@ -225,6 +256,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"root_path is {self.root_path!r} but public_url's path is {url_path or '/'!r}; "
                 "they describe the same external prefix and must agree"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _refuse_open_writes_in_production(self) -> Settings:
+        """Never allow the M2 interim write gate to be opened in production."""
+        if self.allow_unauthenticated_writes and self.env == "production":
+            raise ValueError(
+                "allow_unauthenticated_writes cannot be enabled when REPOMAN_ENV=production: "
+                "it disables the only thing standing in front of package upload and repository "
+                "creation until LDAP authentication lands in M3."
             )
         return self
 
@@ -266,6 +308,31 @@ class Settings(BaseSettings):
     def cookie_path(self) -> str:
         """Scope cookies to the mount point so co-hosted apps cannot read them (13.5)."""
         return self.effective_root_path or "/"
+
+    @cached_property
+    def repository_base(self) -> str:
+        """Base URL of the served repository trees, for client snippets (4.4).
+
+        Defaults to ``<public_url>/repos``, which is what the reference nginx
+        configuration in the documentation maps to the repository roots.
+        """
+        if self.repository_base_url:
+            return self.repository_base_url
+        return f"{self.public_url}/repos"
+
+    def repository_url(self, slug: str) -> str:
+        return f"{self.repository_base}/{slug}"
+
+    @cached_property
+    def key_uid_domain(self) -> str:
+        """Email domain for generated signing keys (4.3).
+
+        Falls back to the public URL's hostname so a fresh deployment can
+        generate a usable key without being told anything extra.
+        """
+        if self.key_email_domain:
+            return self.key_email_domain
+        return urlsplit(self.public_url).hostname or "localhost"
 
     @cached_property
     def trusted_proxy_networks(self) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:

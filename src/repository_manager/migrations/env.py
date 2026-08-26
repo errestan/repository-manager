@@ -14,7 +14,7 @@ from logging.config import fileConfig
 from typing import Any
 
 from alembic import context
-from sqlalchemy import Connection, pool
+from sqlalchemy import JSON, Connection, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from repository_manager.config import Settings
@@ -49,17 +49,29 @@ def database_url() -> str:
 
 
 def render_item(type_: str, obj: Any, autogen_context: Any) -> Any:
-    """Render UtcDateTime as its underlying SQL type.
+    """Render custom column types in a form a standalone migration can execute.
 
     A migration must keep working years after it was written, so it should not
-    import application models -- those move and get renamed.  UtcDateTime adds
-    no DDL of its own beyond ``DateTime(timezone=True)``; the UTC normalisation
-    is Python-side behaviour.  Emitting the plain SQLAlchemy type keeps every
-    migration self-contained.
+    import application models -- those move and get renamed.  Two types need
+    help here:
+
+    * ``UtcDateTime`` adds no DDL of its own beyond ``DateTime(timezone=True)``;
+      the UTC normalisation is Python-side behaviour.
+    * the dialect-variant JSON column renders by default as
+      ``postgresql.JSONB(astext_type=Text())``, which names two symbols Alembic
+      does not import -- the generated file raises ``NameError`` before it ever
+      touches the database.  Registering the imports and spelling the type out
+      fixes it, and keeps PostgreSQL on JSONB rather than quietly downgrading it.
     """
-    if type_ == "type" and isinstance(obj, UtcDateTime):
-        autogen_context.imports.add("import sqlalchemy as sa")
+    if type_ != "type":
+        return False
+    # `import sqlalchemy as sa` is already in script.py.mako; adding it here too
+    # would emit it twice and fail the lint hook on the generated file.
+    if isinstance(obj, UtcDateTime):
         return "sa.DateTime(timezone=True)"
+    if isinstance(obj, JSON):
+        autogen_context.imports.add("from sqlalchemy.dialects import postgresql")
+        return 'sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")'
     return False
 
 

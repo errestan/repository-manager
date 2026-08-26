@@ -1,0 +1,58 @@
+{% extends "base.html.j2" %}
+{% from "partials/tables.html.j2" import scrollable %}
+{% from "partials/status.html.j2" import job_state %}
+{% block title %}Jobs — Repository Manager{% endblock %}
+{% block description %}
+  Background metadata regeneration jobs and their outcomes.
+{% endblock %}
+{% block content %}
+  <h1>Jobs</h1>
+  <p class="lede">
+    Metadata is regenerated in the background, so an upload returns as soon as the package is
+    stored. {{ active }} job{{ '' if active == 1 else 's' }} still to finish.
+  </p>
+  <p>
+    <a href="{{ url_for('job_list') }}">Refresh this page</a> to see the latest state.
+  </p>
+  {% if jobs %}
+    {% call scrollable("Recent jobs") %}
+      <table class="data-table">
+        <caption>The {{ limit }} most recent jobs, newest first.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Job</th>
+            <th scope="col">Repository</th>
+            <th scope="col">State</th>
+            <th scope="col">Started</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in jobs %}
+            <tr>
+              <th scope="row">
+                <a href="{{ url_for('job_detail', job_id=job.id) }}">{{ job.type.label }} #{{ job.id }}</a>
+              </th>
+              <td>
+                {% if job.repository %}
+                  {{ job.repository.name }}
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </td>
+              <td>{{ job_state(job) }}</td>
+              <td>
+                {% if job.started_at %}
+                  <time datetime="{{ job.started_at.isoformat() }}">{{ job.started_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>
+                {% else %}
+                  <span class="muted">Not yet</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+  {% else %}
+    <p>No jobs have run yet.</p>
+  {% endif %}
+{% endblock %}

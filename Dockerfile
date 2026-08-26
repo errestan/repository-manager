@@ -25,10 +25,17 @@ FROM python:3.13-slim-bookworm AS runtime
 
 # createrepo-c generates RPM metadata (AD-2); gnupg signs repository metadata
 # (AD-6). Neither can be installed by pip, which is why this image exists.
+#
+# zstd is here for uploads, not for us: dpkg on newer distributions compresses a
+# package's control member with zstd, and python-debian reads that by shelling
+# out to `unzstd`. Without it those packages are rejected at upload with a
+# message about a missing binary, which is a baffling way to learn that an
+# image is incomplete.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         createrepo-c \
         gnupg \
+        zstd \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

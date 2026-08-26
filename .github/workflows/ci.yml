@@ -95,11 +95,13 @@ jobs:
 
       # createrepo_c generates RPM metadata; apt/dnf are what actually prove the
       # generated repositories are valid (AD-2). These are the point of this job.
+      # zstd is needed to read packages whose control member dpkg compressed with
+      # it -- python-debian shells out to `unzstd` for those.
       - name: System dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            createrepo-c gnupg dpkg-dev apt-utils dnf
+            createrepo-c gnupg dpkg-dev apt-utils dnf zstd
 
       - uses: astral-sh/setup-uv@v5
         with:
@@ -117,7 +119,7 @@ jobs:
           REPOMAN_LDAP_BIND_DN: cn=admin,dc=example,dc=test
           REPOMAN_LDAP_BIND_PASSWORD: adminpassword
           REPOMAN_LDAP_USER_BASE_DN: ou=users,dc=example,dc=test
-        run: scripts/run_marked_tests.sh integration M2
+        run: uv run pytest -m integration -v
 
   e2e:
     name: Browser and accessibility (mounted at ${{ matrix.mount || '/' }})
@@ -147,7 +149,7 @@ jobs:
       - name: End-to-end and axe-core tests
         env:
           REPOMAN_ROOT_PATH: ${{ matrix.mount }}
-        run: scripts/run_marked_tests.sh e2e M4
+        run: uv run pytest -m e2e -v
 
       - name: Upload report on failure
         if: failure()

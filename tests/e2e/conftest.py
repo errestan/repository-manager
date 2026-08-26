@@ -27,9 +27,16 @@ from repository_manager.models import (
     AptArchitecture,
     AptComponent,
     AptDistribution,
+    Job,
+    JobState,
+    JobType,
+    KeyAlgorithm,
+    Package,
+    PackagePublication,
     Repository,
     RepositoryType,
     RpmVariant,
+    SigningKey,
 )
 
 STARTUP_TIMEOUT_SECONDS = 45
@@ -72,6 +79,10 @@ def live_server(tmp_path_factory: pytest.TempPathFactory, root_path: str) -> Ite
         # otherwise, which is itself covered by the unit tests.
         "REPOMAN_ENV": "development",
         "REPOMAN_LOG_FORMAT": "console",
+        # The management forms are a large part of what these tests audit --
+        # error summaries, fieldsets, labelled file inputs -- and they are only
+        # reachable with the interim write gate open (12).
+        "REPOMAN_ALLOW_UNAUTHENTICATED_WRITES": "true",
     }
 
     # The log goes to a file, never to a pipe.  An unread PIPE only holds about
@@ -141,9 +152,78 @@ def _seed(url: str) -> None:
             retention_count=5,
         )
         rpm.variants.append(RpmVariant(name="el9", arch="x86_64"))
+
+        # A key row only: no keyring is involved, because nothing in these tests
+        # signs anything.  It exists so the detail page can render the client
+        # setup snippet and the key download link.
+        key = SigningKey(
+            name="internal",
+            fingerprint="A" * 40,
+            algorithm=KeyAlgorithm.ED25519,
+            uid="Internal repository signing key <internal@example.test>",
+            public_key_armored=(
+                "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nnot-a-real-key\n"
+                "-----END PGP PUBLIC KEY BLOCK-----\n"
+            ),
+        )
+        session.add(key)
+        session.flush()
+        apt.signing_key_id = key.id
+
         session.add_all([apt, rpm])
+        session.flush()
+        _seed_packages(session, apt)
+        _seed_jobs(session, apt)
         session.commit()
     engine.dispose()
+
+
+def _seed_packages(session: Session, repository: Repository) -> None:
+    """Enough rows for the package table to have something to render."""
+    main = repository.distributions[0].components[0]
+    for name, version, architecture in (
+        ("alpha", "1.0-1", "amd64"),
+        ("alpha", "1.2-1", "amd64"),
+        ("libgamma", "3.1-1", "all"),
+    ):
+        package = Package(
+            repository_id=repository.id,
+            name=name,
+            source_name=name,
+            version=version,
+            architecture=architecture,
+            relative_path=f"pool/main/{name[0]}/{name}/{name}_{version}_{architecture}.deb",
+            size=4096,
+            sha256="0" * 64,
+            control_json={"Package": name, "Version": version, "Architecture": architecture},
+        )
+        package.publications.append(PackagePublication(component_id=main.id))
+        session.add(package)
+
+
+def _seed_jobs(session: Session, repository: Repository) -> None:
+    """One job of each interesting outcome, so both renderings are audited."""
+    session.add(
+        Job(
+            type=JobType.REGENERATE_METADATA,
+            repository_id=repository.id,
+            state=JobState.SUCCEEDED,
+            progress=100,
+            log="Regenerating metadata for internal.\nWrote 8 index files.\n",
+            actor="web",
+        )
+    )
+    session.add(
+        Job(
+            type=JobType.REGENERATE_METADATA,
+            repository_id=repository.id,
+            state=JobState.FAILED,
+            progress=30,
+            log="Regenerating metadata for internal.\n",
+            error="The signing key is not present in the keyring.",
+            actor="web",
+        )
+    )
 
 
 @pytest.fixture
@@ -153,4 +233,12 @@ def pages(live_server: str) -> list[str]:
         f"{live_server}/",
         f"{live_server}/repositories/internal",
         f"{live_server}/repositories/el9",
+        f"{live_server}/repositories/internal/packages",
+        f"{live_server}/repositories/internal/packages/upload",
+        f"{live_server}/repositories/internal/distributions",
+        f"{live_server}/repositories/new",
+        f"{live_server}/keys",
+        f"{live_server}/jobs",
+        f"{live_server}/jobs/1",
+        f"{live_server}/jobs/2",
     ]

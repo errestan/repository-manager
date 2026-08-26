@@ -111,6 +111,7 @@ def cmd_check_config(_args: argparse.Namespace) -> int:
     print("Configuration is valid.\n")
     print(f"  environment      : {settings.env}")
     print(f"  public URL       : {settings.public_url}")
+    print(f"  repository URLs  : {settings.repository_base}/<slug>")
     print(f"  mounted at       : {settings.effective_root_path or '/'}")
     print(f"  database         : {settings.database_url}")
     print(f"  allowed roots    : {', '.join(str(p) for p in settings.allowed_roots)}")
@@ -120,6 +121,15 @@ def cmd_check_config(_args: argparse.Namespace) -> int:
     trusted = ", ".join(settings.trusted_proxies) or "(none — forwarded headers ignored)"
     print(f"  trusted proxies  : {trusted}")
     print(f"  log format       : {settings.log_format}")
+    if settings.allow_unauthenticated_writes:
+        # Loud, because it is: anyone who can reach this instance can upload.
+        print(
+            "\n  WARNING: REPOMAN_ALLOW_UNAUTHENTICATED_WRITES is set. Repository\n"
+            "  creation, key management and package upload are open to anyone who\n"
+            "  can reach this instance. Intended only for development until LDAP\n"
+            "  authentication lands.",
+            file=sys.stderr,
+        )
     return 0
 
 

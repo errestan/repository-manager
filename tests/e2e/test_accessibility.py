@@ -62,7 +62,7 @@ def test_navigation_and_detail_page(page: Page, live_server: str) -> None:
     expect(page.get_by_role("heading", name="Repositories", level=1)).to_be_visible()
     page.get_by_role("link", name="Internal APT").click()
     expect(page.get_by_role("heading", name="Internal APT", level=1)).to_be_visible()
-    expect(page.get_by_text("bookworm")).to_be_visible()
+    expect(page.get_by_text("bookworm", exact=True).first).to_be_visible()
 
 
 def test_theme_switch_works_without_javascript(browser: Browser, live_server: str) -> None:
@@ -106,3 +106,100 @@ def test_dark_theme_also_passes_axe(page: Page, live_server: str, pages: list[st
         page.goto(url)
         assert page.locator("html").get_attribute("data-theme") == "dark"
         _audit(page)
+
+
+# --------------------------------------------------------------- forms (M2)
+
+
+def test_a_rejected_form_is_accessible(page: Page, live_server: str) -> None:
+    """Error states are where accessibility usually breaks, so audit one (11).
+
+    Retention has no browser-side `required`, deliberately: the choice must be
+    made explicitly (5.3), and leaving it unset is the natural way to reach the
+    server-rendered error state.
+    """
+    page.goto(f"{live_server}/repositories/new")
+    page.fill("#field-name", "Audited")
+    page.fill("#field-root_path", "/not/an/allowed/root")
+    page.fill("#field-codename", "bookworm")
+    page.fill("#field-components", "main")
+    page.fill("#field-architectures", "amd64")
+    page.select_option("#field-signing_key_id", index=1)
+    page.get_by_role("button", name="Create repository").click()
+
+    page.wait_for_selector(".error-summary")
+    _audit(page)
+
+
+def test_form_errors_are_summarised_and_linked(page: Page, live_server: str) -> None:
+    """Each entry in the summary must reach the field it came from (11)."""
+    page.goto(f"{live_server}/repositories/new")
+    page.fill("#field-name", "Audited")
+    page.fill("#field-root_path", "/not/an/allowed/root")
+    page.fill("#field-codename", "bookworm")
+    page.fill("#field-components", "main")
+    page.fill("#field-architectures", "amd64")
+    page.select_option("#field-signing_key_id", index=1)
+    page.get_by_role("button", name="Create repository").click()
+
+    summary = page.locator(".error-summary")
+    assert summary.get_attribute("role") == "alert"
+    links = summary.locator("a")
+    assert links.count() >= 1
+    for index in range(links.count()):
+        target = links.nth(index).get_attribute("href") or ""
+        assert target.startswith("#field-")
+        assert page.locator(target).count() == 1, target
+
+
+def test_every_input_has_a_label(page: Page, pages: list[str]) -> None:
+    """No control may be left without an accessible name (11)."""
+    for url in pages:
+        page.goto(url)
+        controls = page.locator("input:not([type=hidden]), select, textarea")
+        for index in range(controls.count()):
+            control = controls.nth(index)
+            identifier = control.get_attribute("id")
+            assert identifier, f"unlabelled control on {url}"
+            assert page.locator(f'label[for="{identifier}"], legend#{identifier}').count() >= 1, (
+                f"no label for #{identifier} on {url}"
+            )
+
+
+def test_the_upload_form_works_without_javascript(browser: Browser, live_server: str) -> None:
+    """Uploading is a plain multipart POST, with no scripting involved (11)."""
+    context = browser.new_context(java_script_enabled=False)
+    try:
+        page = context.new_page()
+        page.goto(f"{live_server}/repositories/internal/packages/upload")
+        form = page.locator("form[enctype='multipart/form-data']")
+        assert form.count() == 1
+        assert form.get_attribute("method") == "post"
+        assert page.locator("#field-package").get_attribute("type") == "file"
+    finally:
+        context.close()
+
+
+def test_job_state_is_readable_as_text(page: Page, live_server: str) -> None:
+    """Status carries a word, never colour or a symbol alone (11)."""
+    page.goto(f"{live_server}/jobs")
+    body = page.locator("main").inner_text()
+    assert "Succeeded" in body
+    assert "Failed" in body
+
+
+def test_a_failed_job_explains_itself(page: Page, live_server: str) -> None:
+    page.goto(f"{live_server}/jobs/2")
+    assert "signing key is not present" in page.locator("main").inner_text()
+    _audit(page)
+
+
+def test_the_client_setup_snippet_is_absolute(page: Page, live_server: str) -> None:
+    """Copied into sources.list, so a relative URL would be useless (4.4, 13.5)."""
+    page.goto(f"{live_server}/repositories/internal")
+    # Two snippets are shown: the key install, then the sources.list line.
+    snippets = page.locator("pre.snippet")
+    sources_line = snippets.nth(1).inner_text()
+    assert sources_line.startswith("deb [signed-by=")
+    assert "http://127.0.0.1" in sources_line
+    assert "/repos/internal bookworm" in sources_line

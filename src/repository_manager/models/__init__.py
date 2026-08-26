@@ -1,7 +1,26 @@
-"""SQLAlchemy models (specification.md 9)."""
+"""SQLAlchemy models (specification.md 9).
+
+Importing this package registers every mapped class, which is what lets the
+string-based relationship targets ("Repository", "PackagePublication") resolve.
+Alembic's autogenerate and the drift test both depend on it importing the
+complete set, so new model modules belong here as soon as they exist.
+"""
 
 from repository_manager.models.base import Base, RepositoryType, UtcDateTime, utcnow
+from repository_manager.models.job import Job, JobState, JobType
+from repository_manager.models.key import (
+    FINGERPRINT_PATTERN,
+    KEY_NAME_PATTERN,
+    KeyAlgorithm,
+    SigningKey,
+)
+from repository_manager.models.package import (
+    Package,
+    PackagePublication,
+    UploadSource,
+)
 from repository_manager.models.repository import (
+    NAME_PATTERN,
     SLUG_PATTERN,
     AptArchitecture,
     AptComponent,
@@ -11,14 +30,25 @@ from repository_manager.models.repository import (
 )
 
 __all__ = [
+    "FINGERPRINT_PATTERN",
+    "KEY_NAME_PATTERN",
+    "NAME_PATTERN",
     "SLUG_PATTERN",
     "AptArchitecture",
     "AptComponent",
     "AptDistribution",
     "Base",
+    "Job",
+    "JobState",
+    "JobType",
+    "KeyAlgorithm",
+    "Package",
+    "PackagePublication",
     "Repository",
     "RepositoryType",
     "RpmVariant",
+    "SigningKey",
+    "UploadSource",
     "UtcDateTime",
     "utcnow",
 ]

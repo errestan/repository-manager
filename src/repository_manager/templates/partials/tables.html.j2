@@ -1,0 +1,15 @@
+{#
+  A horizontally scrollable table wrapper (specification.md 11).
+
+  A region that scrolls must be reachable by keyboard, or someone who cannot use
+  a pointer simply cannot see the columns that overflow -- axe reports this as
+  `scrollable-region-focusable`.  `tabindex="0"` makes it focusable and
+  `role="region"` with a label means focus lands somewhere that announces what
+  it is, rather than on an anonymous box.
+#}
+{% macro scrollable(label) %}
+  <div class="table-scroll"
+       role="region"
+       aria-label="{{ label }}"
+       tabindex="0">{{ caller() }}</div>
+{% endmacro %}

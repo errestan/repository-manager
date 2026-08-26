@@ -21,6 +21,12 @@
   --badge-apt-text: #0d3c78;
   --badge-rpm-bg: #f7e3d6;
   --badge-rpm-text: #7a3708;
+  --danger: #a3161b;
+  --danger-bg: #fdeaea;
+  --success: #1a5c2e;
+  --success-bg: #e6f4ea;
+  --info-bg: #eef1f6;
+  --field-bg: #ffffff;
 
   --space: 1rem;
   --radius: 6px;
@@ -41,6 +47,12 @@ html[data-theme="dark"] {
   --badge-apt-text: #bcd7ff;
   --badge-rpm-bg: #4a2409;
   --badge-rpm-text: #f6cfae;
+  --danger: #ff9d9d;
+  --danger-bg: #3a1618;
+  --success: #8ede9f;
+  --success-bg: #10301c;
+  --info-bg: #1a1d23;
+  --field-bg: #1a1d23;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -351,4 +363,231 @@ button:hover {
 .site-footer p {
   max-width: var(--measure);
   margin: 0 auto;
+}
+
+/* ------------------------------------------------------------------ forms */
+
+/*
+ * Visually hidden but still announced: used to give a repeated control (five
+ * "Remove" buttons in a table) an accessible name that says which row it acts
+ * on. `clip-path` rather than `display: none`, which would remove it from the
+ * accessibility tree entirely.
+ */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.stacked-form {
+  max-width: var(--measure);
+  margin-top: var(--space);
+}
+
+.field {
+  margin-bottom: calc(var(--space) * 1.25);
+  border: 0;
+  padding: 0;
+}
+
+.field > label,
+.field > legend {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  padding: 0;
+}
+
+.required-marker {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.field-hint {
+  margin: 0 0 0.35rem;
+  font-size: 0.9375rem;
+  color: var(--text-muted);
+}
+
+.field-error {
+  margin: 0 0 0.35rem;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.field input[type="text"],
+.field input[type="search"],
+.field input[type="number"],
+.field input[type="password"],
+.field select,
+.field textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--field-bg);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.45rem 0.6rem;
+}
+
+.field textarea {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* The error state is carried by a border AND the message above it, never by
+   colour alone (specification.md 11). */
+.field-invalid input,
+.field-invalid select,
+.field-invalid textarea {
+  border-color: var(--danger);
+}
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+}
+
+.radio-option label {
+  font-weight: 400;
+}
+
+.field input[type="file"] {
+  font: inherit;
+  color: var(--text);
+}
+
+.button-primary,
+.button-danger {
+  font-weight: 600;
+}
+
+.button-danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* ------------------------------------------------------- status messaging */
+
+.error-summary {
+  border: 3px solid var(--danger);
+  background: var(--danger-bg);
+  border-radius: var(--radius);
+  padding: var(--space);
+  margin-bottom: var(--space);
+  max-width: var(--measure);
+}
+
+.error-summary h2 {
+  margin-top: 0;
+  color: var(--danger);
+  font-size: 1.125rem;
+}
+
+.error-summary a {
+  color: var(--danger);
+}
+
+.notice {
+  border: 2px solid var(--success);
+  background: var(--success-bg);
+  border-radius: var(--radius);
+  padding: 0.75rem var(--space);
+  margin-bottom: var(--space);
+  max-width: var(--measure);
+}
+
+.callout {
+  border: 1px solid var(--border);
+  background: var(--info-bg);
+  border-radius: var(--radius);
+  padding: 0.75rem var(--space);
+  max-width: var(--measure);
+}
+
+.state {
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.state-failed {
+  color: var(--danger);
+}
+
+.state-succeeded {
+  color: var(--success);
+}
+
+.job-status {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 0.75rem var(--space);
+  max-width: var(--measure);
+}
+
+/* ------------------------------------------------------------- listings */
+
+/* Scrollable, therefore focusable and labelled -- see .table-scroll (11). */
+.snippet,
+.job-log {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space);
+  overflow-x: auto;
+}
+
+.snippet code,
+.job-log code {
+  background: none;
+  border: 0;
+  padding: 0;
+  white-space: pre;
+}
+
+.fingerprint {
+  letter-spacing: 0.05em;
+}
+
+.filter-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space);
+  align-items: flex-end;
+  margin-top: var(--space);
+}
+
+.filter-form .field {
+  margin-bottom: 0;
+}
+
+.pagination ul,
+.action-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space);
+  align-items: center;
+}
+
+/* The wrapper scrolls, not the table itself: making the <table> a block
+   element to get overflow would detach it from its own accessibility tree, and
+   a scrollable box has to be keyboard-reachable in any case (11). */
+.table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.table-scroll:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
 }

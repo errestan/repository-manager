@@ -1,0 +1,72 @@
+{% extends "base.html.j2" %}
+{% from "partials/status.html.j2" import job_state %}
+{% block title %}{{ job.type.label }} #{{ job.id }} — Repository Manager{% endblock %}
+{% block description %}
+  Progress and output for one background job.
+{% endblock %}
+{% block content %}
+  <nav aria-label="Breadcrumb" class="breadcrumb">
+    <ol>
+      <li>
+        <a href="{{ url_for('job_list') }}">Jobs</a>
+      </li>
+      <li aria-current="page">{{ job.type.label }} #{{ job.id }}</li>
+    </ol>
+  </nav>
+  <h1>{{ job.type.label }} #{{ job.id }}</h1>
+  {#
+    Progress is announced politely and stated as text, not conveyed by a bar
+    alone, so it is legible without sight and without JavaScript (11).
+  #}
+  <div aria-live="polite" class="job-status">
+    <p>
+      {{ job_state(job) }}
+      {% if not finished %}— {{ job.progress }}% complete.{% endif %}
+    </p>
+    {% if not finished %}
+      <p>
+        This page does not update on its own.
+        <a href="{{ url_for('job_detail', job_id=job.id) }}">Refresh to check again</a>.
+      </p>
+    {% endif %}
+  </div>
+  <h2>Details</h2>
+  <dl class="detail-list">
+    <dt>Repository</dt>
+    <dd>
+      {% if job.repository %}
+        <a href="{{ url_for('repository_detail', slug=job.repository.slug) }}">{{ job.repository.name }}</a>
+      {% else %}
+        —
+      {% endif %}
+    </dd>
+    <dt>Requested by</dt>
+    <dd>
+      {{ job.actor or 'the system' }}
+    </dd>
+    <dt>Created</dt>
+    <dd>
+      <time datetime="{{ job.created_at.isoformat() }}">{{ job.created_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>
+    </dd>
+    <dt>Duration</dt>
+    <dd>
+      {% if job.duration_seconds is not none %}
+        {{ '%.1f' | format(job.duration_seconds) }} seconds
+      {% else %}
+        Not started
+      {% endif %}
+    </dd>
+  </dl>
+  {% if job.error %}
+    <h2>Why it failed</h2>
+    <div class="error-summary" role="alert" tabindex="-1">
+      <p>{{ job.error }}</p>
+    </div>
+  {% endif %}
+  <h2>Output</h2>
+  {% if job.log %}
+    <pre class="job-log" role="region" aria-label="Job output" tabindex="0"><code>{{ job.log }}</code></pre>
+  {% else %}
+    <p>This job produced no output.</p>
+  {% endif %}
+{% endblock %}

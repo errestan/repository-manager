@@ -59,7 +59,11 @@ repos:
   - repo: https://github.com/codespell-project/codespell
     rev: v2.4.3
     hooks:
+      # `fpr` is gpg's own record name in its colon-separated listing format,
+      # not a misspelling of "for"; it has to be spelled exactly that way to
+      # parse the output at all.
       - id: codespell
+        args: ["--ignore-words-list=fpr"]
         additional_dependencies: [tomli]
         exclude: ^(LICENSE|uv\.lock)$
 

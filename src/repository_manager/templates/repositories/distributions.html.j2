@@ -1,0 +1,70 @@
+{% extends "base.html.j2" %}
+{% from "partials/tables.html.j2" import scrollable %}
+{% from "partials/forms.html.j2" import error_summary, text_field, textarea_field %}
+{% block title %}
+  {% if form.errors %}Error: {% endif %}Distributions of {{ repository.name }} — Repository Manager
+{% endblock %}
+{% block description %}
+  Add and review the distributions an APT repository publishes.
+{% endblock %}
+{% block content %}
+  <nav aria-label="Breadcrumb" class="breadcrumb">
+    <ol>
+      <li>
+        <a href="{{ url_for('repository_list') }}">Repositories</a>
+      </li>
+      <li>
+        <a href="{{ url_for('repository_detail', slug=repository.slug) }}">{{ repository.name }}</a>
+      </li>
+      <li aria-current="page">Distributions</li>
+    </ol>
+  </nav>
+  <h1>Distributions</h1>
+  {{ error_summary(form) }}
+  {% if repository.distributions %}
+    {% call scrollable("Distributions") %}
+      <table class="data-table">
+        <caption>Distributions published by {{ repository.name }}.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Codename</th>
+            <th scope="col">Suite</th>
+            <th scope="col">Components</th>
+            <th scope="col">Architectures</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for distribution in repository.distributions %}
+            <tr>
+              <th scope="row">
+                <code>{{ distribution.codename }}</code>
+              </th>
+              <td>
+                <code>{{ distribution.suite or distribution.codename }}</code>
+              </td>
+              <td>{{ distribution.components | map(attribute='name') | join(', ') or '—' }}</td>
+              <td>{{ distribution.architectures | map(attribute='name') | join(', ') or '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+  {% else %}
+    <p>This repository publishes no distributions yet.</p>
+  {% endif %}
+  <h2>Add a distribution</h2>
+  <p>Adding one queues a metadata rebuild, so the new tree is signed and ready straight away.</p>
+  <form method="post"
+        action="{{ url_for('repository_distribution_add', slug=repository.slug) }}"
+        class="stacked-form">
+    {{ text_field(form, 'codename', 'Codename', required=True,
+      hint='What clients put in sources.list, e.g. trixie.') }}
+    {{ text_field(form, 'suite', 'Suite', hint='Optional. Defaults to the codename.') }}
+    {{ text_field(form, 'components', 'Components', required=True,
+      hint='Space or comma separated, e.g. main contrib.') }}
+    {{ text_field(form, 'architectures', 'Architectures', required=True,
+      hint='Space or comma separated, e.g. amd64 arm64.') }}
+    {{ textarea_field(form, 'description', 'Description', rows=2, hint='Optional.') }}
+    <button type="submit" class="button-primary">Add distribution</button>
+  </form>
+{% endblock %}

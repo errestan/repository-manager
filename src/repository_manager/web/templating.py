@@ -58,6 +58,14 @@ def build_templates() -> Jinja2Templates:
     env = templates.env
     env.trim_blocks = True
     env.lstrip_blocks = True
+    # Autoescaping is forced on rather than left to Jinja's default.  That
+    # default is `select_autoescape`, which decides from the file extension and
+    # only recognises .html/.htm/.xml -- every template here ends in .html.j2,
+    # so it matched none of them and escaping was silently off.  Every template
+    # in this project renders HTML, so the blanket setting is also the correct
+    # one; a future non-HTML template must opt out explicitly with
+    # `{% autoescape false %}` (10.2).
+    env.autoescape = True
     # A typo in a template name should fail loudly in CI, not render a blank
     # region that nobody notices until a user reports a missing link.
     env.undefined = StrictUndefined

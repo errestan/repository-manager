@@ -1,0 +1,63 @@
+{% extends "base.html.j2" %}
+{% from "partials/forms.html.j2" import error_summary, select_field %}
+{% block title %}
+  {% if form.errors %}Error: {% endif %}Upload to {{ repository.name }} — Repository Manager
+{% endblock %}
+{% block description %}
+  Upload a Debian package into one of this repository's components.
+{% endblock %}
+{% block content %}
+  <nav aria-label="Breadcrumb" class="breadcrumb">
+    <ol>
+      <li>
+        <a href="{{ url_for('repository_list') }}">Repositories</a>
+      </li>
+      <li>
+        <a href="{{ url_for('repository_detail', slug=repository.slug) }}">{{ repository.name }}</a>
+      </li>
+      <li aria-current="page">Upload</li>
+    </ol>
+  </nav>
+  <h1>Upload a package</h1>
+  {{ error_summary(form) }}
+  {% if targets %}
+    <p class="lede">
+      The package's name, version and architecture are read from the file itself; the filename
+      you upload is not used. Metadata is regenerated in the background once the file is stored.
+    </p>
+    <form method="post"
+          action="{{ url_for('repository_upload', slug=repository.slug) }}"
+          enctype="multipart/form-data"
+          class="stacked-form">
+      {{ select_field(form, 'target', 'Publish into', targets, required=True,
+        empty_label='Choose a distribution and component…') }}
+      {% set message = form.messages.get('package') %}
+      <div class="field{{ ' field-invalid' if message else '' }}">
+        <label for="field-package">
+          Package file <span class="required-marker">(required)</span>
+        </label>
+        <p class="field-hint" id="hint-package">A <code>.deb</code> file. Architecture must be one this distribution publishes, or <code>all</code>.</p>
+        {% if message %}
+          <p class="field-error" id="error-package">
+            <span aria-hidden="true">✗</span> <strong>Error:</strong> {{ message }}
+          </p>
+        {% endif %}
+        <input type="file"
+               id="field-package"
+               name="package"
+               accept=".deb,application/vnd.debian.binary-package"
+               required
+               {% if message %}aria-invalid="true"{% endif %}
+               aria-describedby="hint-package{{ ' error-package' if message else '' }}">
+      </div>
+      <button type="submit" class="button-primary">Upload package</button>
+    </form>
+  {% else %}
+    <div class="callout" role="alert">
+      <p>
+        This repository has no components to publish into yet.
+        <a href="{{ url_for('repository_distributions', slug=repository.slug) }}">Add a distribution</a> first.
+      </p>
+    </div>
+  {% endif %}
+{% endblock %}

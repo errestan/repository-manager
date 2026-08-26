@@ -1,8 +1,8 @@
 """Repository shape: the repository itself and its publication targets.
 
-Only the tables M1 actually needs are defined here.  Packages, keys, jobs,
-sessions, tokens and the audit log arrive with their own milestones
-(specification.md 13.6) so that every migration corresponds to working code.
+Tables arrive with the milestone that first uses them (specification.md 13.6),
+so every migration corresponds to working code.  Sessions, API tokens and the
+audit log are still to come.
 """
 
 from __future__ import annotations
@@ -22,6 +22,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from repository_manager.models.base import Base, RepositoryType, UtcDateTime, utcnow
+from repository_manager.models.job import Job
+from repository_manager.models.key import SigningKey
+from repository_manager.models.package import Package, PackagePublication
 
 # Lowercase, digits and hyphens; must start and end alphanumeric.  This is the
 # only user-supplied string that ever appears in a URL path, so it is kept
@@ -56,6 +59,13 @@ class Repository(Base):
     root_path: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text, default=None)
 
+    # RESTRICT rather than SET NULL: a repository with no key cannot produce
+    # signed metadata, so the database refuses the delete instead of quietly
+    # leaving the tree unsignable (10.5).
+    signing_key_id: Mapped[int | None] = mapped_column(
+        ForeignKey("signing_key.id", ondelete="RESTRICT"), index=True, default=None
+    )
+
     # 0 means "keep every version"; retention is version-based, not time-based
     # (AD-16, 5.3).  NOT NULL so the policy is always an explicit choice.
     retention_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -80,6 +90,17 @@ class Repository(Base):
         back_populates="repository",
         cascade="all, delete-orphan",
         order_by="RpmVariant.name, RpmVariant.arch",
+    )
+    signing_key: Mapped[SigningKey | None] = relationship(back_populates="repositories")
+    packages: Mapped[list[Package]] = relationship(
+        back_populates="repository",
+        cascade="all, delete-orphan",
+        order_by="Package.name, Package.version",
+    )
+    jobs: Mapped[list[Job]] = relationship(
+        back_populates="repository",
+        cascade="all, delete-orphan",
+        order_by="Job.created_at.desc()",
     )
 
     @validates("slug")
@@ -138,6 +159,9 @@ class AptComponent(Base):
     name: Mapped[str] = mapped_column(String(100))
 
     distribution: Mapped[AptDistribution] = relationship(back_populates="components")
+    publications: Mapped[list[PackagePublication]] = relationship(
+        back_populates="component", cascade="all, delete-orphan"
+    )
 
     @validates("name")
     def _check_name(self, key: str, value: str) -> str:
@@ -175,6 +199,9 @@ class RpmVariant(Base):
     arch: Mapped[str] = mapped_column(String(32))
 
     repository: Mapped[Repository] = relationship(back_populates="variants")
+    publications: Mapped[list[PackagePublication]] = relationship(
+        back_populates="variant", cascade="all, delete-orphan"
+    )
 
     @validates("name")
     def _check_name(self, key: str, value: str) -> str:

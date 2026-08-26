@@ -1,0 +1,138 @@
+{% extends "base.html.j2" %}
+{% from "partials/tables.html.j2" import scrollable %}
+{% from "partials/notice.html.j2" import notice %}
+{% block title %}Packages in {{ repository.name }} — Repository Manager{% endblock %}
+{% block description %}
+  Search the packages published in this repository.
+{% endblock %}
+{% block content %}
+  <nav aria-label="Breadcrumb" class="breadcrumb">
+    <ol>
+      <li>
+        <a href="{{ url_for('repository_list') }}">Repositories</a>
+      </li>
+      <li>
+        <a href="{{ url_for('repository_detail', slug=repository.slug) }}">{{ repository.name }}</a>
+      </li>
+      <li aria-current="page">Packages</li>
+    </ol>
+  </nav>
+  <h1>Packages in {{ repository.name }}</h1>
+  {% if request.query_params.get('removed') %}
+    {{ notice(request.query_params.get('removed') ~ ' was removed. Metadata is being regenerated.') }}
+  {% endif %}
+  {% if request.query_params.get('published') %}
+    {{ notice("The package was published. Metadata is being regenerated.") }}
+  {% endif %}
+  {#
+    A GET form, so a search is a bookmarkable URL and the back button behaves.
+  #}
+  <form method="get"
+        action="{{ url_for('repository_packages', slug=repository.slug) }}"
+        class="filter-form"
+        role="search"
+        aria-label="Search packages">
+    <div class="field">
+      <label for="field-q">Package name contains</label>
+      <input type="search" id="field-q" name="q" value="{{ query }}">
+    </div>
+    <div class="field">
+      <label for="field-arch">Architecture</label>
+      <select id="field-arch" name="arch">
+        <option value="">Any</option>
+        {% for name in architectures %}
+          <option value="{{ name }}" {% if architecture == name %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+        <option value="all" {% if architecture == 'all' %}selected{% endif %}>all</option>
+      </select>
+    </div>
+    <button type="submit">Search</button>
+    {% if query or architecture %}
+      <a href="{{ url_for('repository_packages', slug=repository.slug) }}">Clear filters</a>
+    {% endif %}
+  </form>
+  <p aria-live="polite">
+    {{ total }} publication{{ '' if total == 1 else 's' }} found{% if query %} matching “{{ query }}”{% endif %}{% if architecture %} for {{ architecture }}{% endif %}.
+    {% if pages > 1 %}Page {{ page }} of {{ pages }}.{% endif %}
+  </p>
+  {% if publications %}
+    {% call scrollable("Packages") %}
+      <table class="data-table">
+        <caption>Packages published in {{ repository.name }}.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Package</th>
+            <th scope="col">Version</th>
+            <th scope="col">Architecture</th>
+            <th scope="col">Published in</th>
+            <th scope="col">Size</th>
+            {% if writes_enabled %}<th scope="col">Action</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for publication in publications %}
+            {% set package = publication.package %}
+            <tr>
+              <th scope="row">
+                <code>{{ package.name }}</code>
+              </th>
+              <td>
+                <code>{{ package.full_version }}</code>
+              </td>
+              <td>{{ package.architecture }}</td>
+              <td>
+                {% if publication.component %}
+                  {{ publication.component.distribution.codename }} / {{ publication.component.name }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td>{{ '{:,}'.format(package.size) }} bytes</td>
+              {% if writes_enabled %}
+                <td>
+                  <form method="post"
+                        action="{{ url_for('repository_package_delete', slug=repository.slug, publication_id=publication.id) }}">
+                    <button type="submit" class="button-danger">
+                      Remove<span class="visually-hidden"> {{ package.name }} {{ package.full_version }} for {{ package.architecture }}</span>
+                    </button>
+                  </form>
+                </td>
+              {% endif %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    {% if pages > 1 %}
+      <nav class="pagination" aria-label="Pagination">
+        <ul>
+          {% if page > 1 %}
+            <li>
+              <a href="{{ url_for('repository_packages', slug=repository.slug).include_query_params(q=query, arch=architecture, page=page - 1) }}"
+                 rel="prev">Previous page</a>
+            </li>
+          {% endif %}
+          {% if page < pages %}
+            <li>
+              <a href="{{ url_for('repository_packages', slug=repository.slug).include_query_params(q=query, arch=architecture, page=page + 1) }}"
+                 rel="next">Next page</a>
+            </li>
+          {% endif %}
+        </ul>
+      </nav>
+    {% endif %}
+  {% else %}
+    <p>
+      {% if query or architecture %}
+        Nothing matched those filters.
+      {% else %}
+        No packages have been uploaded yet.
+      {% endif %}
+    </p>
+  {% endif %}
+  {% if writes_enabled %}
+    <p>
+      <a href="{{ url_for('repository_upload_form', slug=repository.slug) }}">Upload a package</a>
+    </p>
+  {% endif %}
+{% endblock %}

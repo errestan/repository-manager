@@ -1,9 +1,16 @@
 {% extends "base.html.j2" %}
+{% from "partials/tables.html.j2" import scrollable %}
+{% from "partials/status.html.j2" import job_state %}
 {% block title %}{{ repository.name }} — Repository Manager{% endblock %}
+{% block description %}
+  Client setup, publication targets and package count for one repository.
+{% endblock %}
 {% block content %}
   <nav aria-label="Breadcrumb" class="breadcrumb">
     <ol>
-      <li><a href="{{ url_for('repository_list') }}">Repositories</a></li>
+      <li>
+        <a href="{{ url_for('repository_list') }}">Repositories</a>
+      </li>
       <li aria-current="page">{{ repository.name }}</li>
     </ol>
   </nav>
@@ -21,6 +28,22 @@
     <dd>
       <code>{{ repository.slug }}</code>
     </dd>
+    <dt>Packages</dt>
+    <dd>
+      <a href="{{ url_for('repository_packages', slug=repository.slug) }}">
+        {{ package_count }} package{{ '' if package_count == 1 else 's' }}
+      </a>
+    </dd>
+    <dt>Signing key</dt>
+    <dd>
+      {% if repository.signing_key %}
+        <code>{{ repository.signing_key.name }}</code>
+        (<code class="fingerprint">{{ repository.signing_key.short_id }}</code>) —
+        <a href="{{ url_for('key_public', name=repository.signing_key.name) }}">download the public key</a>
+      {% else %}
+        <span class="muted">None. Metadata cannot be signed.</span>
+      {% endif %}
+    </dd>
     <dt>Retention</dt>
     <dd>
       {% if repository.retention_count == 0 %}
@@ -31,56 +54,130 @@
     </dd>
     <dt>Base URL</dt>
     <dd>
-      <code>{{ public_base }}</code>
+      <code>{{ base_url }}</code>
     </dd>
   </dl>
   {% if repository.type.value == 'apt' %}
     <h2>Distributions</h2>
     {% if repository.distributions %}
-      <table class="repository-table">
-        <caption>Publication targets in this repository.</caption>
-        <thead>
-          <tr>
-            <th scope="col">Codename</th>
-            <th scope="col">Components</th>
-            <th scope="col">Architectures</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for distribution in repository.distributions %}
+      {% call scrollable("Publication targets") %}
+        <table class="data-table">
+          <caption>Publication targets in this repository.</caption>
+          <thead>
             <tr>
-              <th scope="row"><code>{{ distribution.codename }}</code></th>
-              <td>{{ distribution.components | map(attribute='name') | join(', ') or '—' }}</td>
-              <td>{{ distribution.architectures | map(attribute='name') | join(', ') or '—' }}</td>
+              <th scope="col">Codename</th>
+              <th scope="col">Components</th>
+              <th scope="col">Architectures</th>
             </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {% for distribution in repository.distributions %}
+              <tr>
+                <th scope="row">
+                  <code>{{ distribution.codename }}</code>
+                </th>
+                <td>{{ distribution.components | map(attribute='name') | join(', ') or '—' }}</td>
+                <td>{{ distribution.architectures | map(attribute='name') | join(', ') or '—' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endcall %}
     {% else %}
       <p>No distributions have been configured yet.</p>
+    {% endif %}
+    {% if client_snippet %}
+      <h2 id="client-setup">Client setup</h2>
+      <p>
+        Trust the key, then add the source. Both steps are needed: without the key,
+        <code>apt</code> will refuse the repository rather than use it unverified.
+      </p>
+      <h3>1. Install the signing key</h3>
+      <pre class="snippet" role="region" aria-label="Command to install the signing key" tabindex="0"><code>sudo curl -fsSL {{ base_url }}/{{ repository.signing_key.name }}.asc \
+  -o /usr/share/keyrings/{{ repository.signing_key.name }}.asc</code></pre>
+      <h3>2. Add the source</h3>
+      <pre class="snippet"
+           role="region"
+           aria-label="Lines to add to sources.list"
+           tabindex="0"><code>{{ client_snippet }}</code></pre>
+      <p>
+        Write that to <code>/etc/apt/sources.list.d/{{ repository.slug }}.list</code>, then run
+        <code>sudo apt update</code>.
+      </p>
     {% endif %}
   {% else %}
     <h2>Variants</h2>
     {% if repository.variants %}
-      <table class="repository-table">
-        <caption>Publication targets in this repository.</caption>
+      {% call scrollable("Publication targets") %}
+        <table class="data-table">
+          <caption>Publication targets in this repository.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Variant</th>
+              <th scope="col">Architecture</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for variant in repository.variants %}
+              <tr>
+                <th scope="row">
+                  <code>{{ variant.name }}</code>
+                </th>
+                <td>
+                  <code>{{ variant.arch }}</code>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endcall %}
+    {% else %}
+      <p>No variants have been configured yet.</p>
+    {% endif %}
+  {% endif %}
+  {% if recent_jobs %}
+    <h2>Recent jobs</h2>
+    {% call scrollable("Recent jobs") %}
+      <table class="data-table">
+        <caption>The most recent background jobs for this repository.</caption>
         <thead>
           <tr>
-            <th scope="col">Variant</th>
-            <th scope="col">Architecture</th>
+            <th scope="col">Job</th>
+            <th scope="col">State</th>
+            <th scope="col">Created</th>
           </tr>
         </thead>
         <tbody>
-          {% for variant in repository.variants %}
+          {% for job in recent_jobs %}
             <tr>
-              <th scope="row"><code>{{ variant.name }}</code></th>
-              <td><code>{{ variant.arch }}</code></td>
+              <th scope="row">
+                <a href="{{ url_for('job_detail', job_id=job.id) }}">{{ job.type.label }} #{{ job.id }}</a>
+              </th>
+              <td>{{ job_state(job) }}</td>
+              <td>
+                <time datetime="{{ job.created_at.isoformat() }}">{{ job.created_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>
+              </td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
-    {% else %}
-      <p>No variants have been configured yet.</p>
-    {% endif %}
+    {% endcall %}
+  {% endif %}
+  {% if writes_enabled %}
+    <h2>Manage</h2>
+    <ul class="action-list">
+      <li>
+        <a href="{{ url_for('repository_upload_form', slug=repository.slug) }}">Upload a package</a>
+      </li>
+      <li>
+        <a href="{{ url_for('repository_distributions', slug=repository.slug) }}">Manage distributions</a>
+      </li>
+      <li>
+        <form method="post"
+              action="{{ url_for('repository_regenerate', slug=repository.slug) }}">
+          <button type="submit">Regenerate metadata</button>
+        </form>
+      </li>
+    </ul>
   {% endif %}
 {% endblock %}

@@ -1,0 +1,67 @@
+{% extends "base.html.j2" %}
+{% from "partials/forms.html.j2" import error_summary, text_field, textarea_field, select_field, radio_group %}
+{% block title %}
+  {% if form.errors %}Error: {% endif %}New repository — Repository Manager
+{% endblock %}
+{% block description %}
+  Create an APT repository and publish its first, empty, signed metadata.
+{% endblock %}
+{% block content %}
+  <nav aria-label="Breadcrumb" class="breadcrumb">
+    <ol>
+      <li>
+        <a href="{{ url_for('repository_list') }}">Repositories</a>
+      </li>
+      <li aria-current="page">New repository</li>
+    </ol>
+  </nav>
+  <h1>New APT repository</h1>
+  {{ error_summary(form) }}
+  {% if not keys %}
+    <div class="callout" role="alert">
+      <p>
+        There are no signing keys yet, and a repository cannot publish unsigned metadata.
+        <a href="{{ url_for('key_list') }}">Create a signing key</a> first.
+      </p>
+    </div>
+  {% else %}
+    <p class="lede">
+      The repository's directory tree, its first empty index and its signature are all created
+      now, so clients can add it and run <code>apt update</code> immediately.
+    </p>
+    <form method="post"
+          action="{{ url_for('repository_create') }}"
+          class="stacked-form">
+      <h2>Identity</h2>
+      {{ text_field(form, 'name', 'Name', required=True,
+        hint='Shown throughout the interface. The URL identifier is derived from it.') }}
+      {{ textarea_field(form, 'description', 'Description', rows=3,
+        hint='Optional. What this repository is for.') }}
+      {{ text_field(form, 'root_path', 'Root path', required=True,
+        hint='An absolute path inside a configured allowed root. It must be empty or not yet exist.') }}
+      <h2>Signing</h2>
+      {{ select_field(form, 'signing_key_id', 'Signing key', key_options,
+        required=True, empty_label='Choose a key…',
+        hint='The key whose signature clients will check.') }}
+      <h2>Retention</h2>
+      {{ radio_group(form, 'retention', 'How many versions of each package should be kept?',
+        [('all', 'Keep every version'), ('count', 'Keep only the newest few')],
+        hint='There is deliberately no default: unbounded growth should be a decision, not an oversight.') }}
+      {{ text_field(form, 'retention_count', 'Versions to keep', type='number',
+        hint='Only used when "keep only the newest few" is selected.') }}
+      <h2>First distribution</h2>
+      {{ text_field(form, 'codename', 'Codename', required=True,
+        hint='What clients put in sources.list, e.g. bookworm or stable.') }}
+      {{ text_field(form, 'suite', 'Suite',
+        hint='Optional. Defaults to the codename.') }}
+      {{ text_field(form, 'components', 'Components', required=True,
+        hint='Space or comma separated, e.g. main contrib.') }}
+      {{ text_field(form, 'architectures', 'Architectures', required=True,
+        hint='Space or comma separated, e.g. amd64 arm64. Packages marked "all" are published to every one.') }}
+      <h2>Release fields</h2>
+      {{ text_field(form, 'origin', 'Origin', hint='Optional. Defaults to the repository name.') }}
+      {{ text_field(form, 'label', 'Label', hint='Optional. Defaults to the repository name.') }}
+      <button type="submit" class="button-primary">Create repository</button>
+    </form>
+  {% endif %}
+{% endblock %}

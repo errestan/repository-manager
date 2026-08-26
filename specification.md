@@ -153,6 +153,12 @@ first four characters for names beginning `lib` (e.g. `pool/main/libf/libfoo/`).
 - `Date` uses RFC 2822 in UTC (`%a, %d %b %Y %H:%M:%S UTC`).
 - Signing: `InRelease` (inline-signed `Release`) and `Release.gpg` (detached, armoured)
   are both produced for client compatibility.
+- `Description-md5` is the MD5 of the raw `Description` field value plus a trailing
+  newline, with continuation lines keeping their single leading space — verified against
+  `apt-ftparchive -o APT::FTPArchive::LongDescription=false`, which is the definition apt
+  itself uses.
+- Indices are written deterministically (stanzas sorted, compression timestamps zeroed), so
+  regenerating an unchanged repository produces byte-identical files.
 - Version ordering uses `debian.debian_support.Version` (Debian policy comparison).
 
 ### 4.2 RPM
@@ -557,6 +563,9 @@ Key settings:
 | `REPOMAN_SEND_HSTS` | `true` | Set false when the reverse proxy already sends HSTS |
 | `REPOMAN_DEV_INSECURE_COOKIES` | `false` | Accept a `http://` public URL in `production`; see §10.6 |
 | `REPOMAN_GNUPGHOME` | `./gnupg` | App-managed keyring directory |
+| `REPOMAN_REPOSITORY_BASE_URL` | `<public_url>/repos` | External URL the repository *trees* are served from (§4.4); client snippets are built from this, not from the application's own URL |
+| `REPOMAN_KEY_EMAIL_DOMAIN` | *(public URL's host)* | Email domain used in a generated signing key's UID (§4.3) |
+| `REPOMAN_VERIFY_UPLOAD_SIGNATURES` | `false` | Verify an uploaded package's own signature (§5.1) |
 | `REPOMAN_LDAP_URL` | *(required)* | `ldaps://…` |
 | `REPOMAN_LDAP_BIND_MODE` | `search` | `search` or `direct` |
 | `REPOMAN_LDAP_BIND_DN` / `_PASSWORD` | — | Service account for search mode |
@@ -568,6 +577,13 @@ Key settings:
 | `REPOMAN_TOKEN_MAX_LIFETIME_DAYS` | `365` | Ceiling on token expiry |
 | `REPOMAN_LOG_FORMAT` | `json` | `json` or `console` |
 | `REPOMAN_ENV` | `production` | Guards debug features |
+
+`REPOMAN_ALLOW_UNAUTHENTICATED_WRITES` (default `false`) is a **temporary** setting, added
+in M2 and removed in M3. M2 delivers the write paths — repository creation, key management,
+upload, removal, regeneration — but M3 delivers the LDAP login that is meant to guard them.
+Rather than ship endpoints an anonymous caller could drive, they are refused unless an
+operator opts in, and configuration rejects the opt-in outright when `REPOMAN_ENV=production`.
+It is a stand-in for the role check that replaces it, not a security model in its own right.
 
 Only `REPOMAN_ALLOWED_ROOTS`, `REPOMAN_PUBLIC_URL` and `REPOMAN_SECRET_KEY` have no default
 and are enforced from M1. The `REPOMAN_LDAP_*` settings are listed as required above because
@@ -657,7 +673,7 @@ the only reliable way to keep sub-path support from regressing.
 | Phase | Contents |
 |---|---|
 | **M1 — Skeleton** | Config, database, migrations, layout/theme, accessibility baseline, health endpoints, anonymous repository list, **and sub-path/proxy-header handling with its dual CI run (§13.5)** — retrofitting prefix-correct URL generation later is far more expensive than starting with it. |
-| **M2 — APT** | Key management, APT repository creation, upload/remove, pure-Python index generation and signing, job queue, verified against `apt-get`. |
+| **M2 — APT** | Key management, APT repository creation, upload/remove, pure-Python index generation and signing, job queue, verified against `apt-get`. Write routes are gated behind `REPOMAN_ALLOW_UNAUTHENTICATED_WRITES` until M3 (§12). |
 | **M3 — Auth** | LDAP login, sessions, CSRF, role mapping, audit log. |
 | **M4 — RPM** | `createrepo_c` integration, variants, `repomd.xml` signing, verified against `dnf`. |
 | **M5 — API** | Scoped tokens, REST endpoints, OpenAPI, CI usage documentation. |
@@ -762,13 +778,11 @@ Notes:
 
 - The `integration` and `e2e` jobs are the ones that actually protect AD-2 and AD-14; they
   are required status checks, not optional.
-- Their markers are declared from the start but are only populated at M2 and M4. Until
-  then `pytest` collects nothing and exits 5, which CI cannot distinguish from a failure,
-  so both jobs run via `scripts/run_marked_tests.sh`, which treats *only* exit 5 as a pass
-  and emits a GitHub notice saying so. Collection errors and genuine test failures still
-  fail the job. **Delete the guard once both markers carry tests** — after M4 it should
-  never fire again, and leaving it in place risks masking a suite that has silently
-  stopped collecting.
+- Both markers carried no tests before M1 and M2 respectively, and `pytest` exits 5 when it
+  collects nothing — indistinguishable from a failure. A guard script treated *only* exit 5
+  as a pass until then. It was **deleted in M2**, once `integration` gained real `apt-get`
+  verification and `e2e` its browser suite, because leaving it in place would mask a suite
+  that had silently stopped collecting.
 - `id-token: write` is granted only in `release.yml`, and only in the publish job.
 - Dependabot is enabled for `pip`, `github-actions`, and `docker`, grouped into weekly PRs.
 - Because CI generates and consumes signed repositories, test signing keys are **generated

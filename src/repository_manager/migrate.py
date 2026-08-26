@@ -51,9 +51,17 @@ def _run_isolated(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     return outcome["value"]  # type: ignore[no-any-return]
 
 
+# Kept in step with alembic.ini.  `build_config` deliberately does not read that
+# file -- it is not shipped in the wheel -- so anything the checkout relies on has
+# to be repeated here, or `db revision` produces differently-named files from
+# `alembic revision`.
+FILE_TEMPLATE = "%%(year)d%%(month).2d%%(day).2d_%%(hour).2d%%(minute).2d_%%(rev)s_%%(slug)s"
+
+
 def build_config(database_url: str) -> Config:
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    config.set_main_option("file_template", FILE_TEMPLATE)
     config.set_main_option("sqlalchemy.url", database_url)
     # env.py reads the URL from here first, so the caller's choice always wins
     # over the environment.

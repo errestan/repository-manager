@@ -1,0 +1,101 @@
+{% extends "base.html.j2" %}
+{% from "partials/tables.html.j2" import scrollable %}
+{% from "partials/forms.html.j2" import error_summary, text_field, textarea_field, select_field %}
+{% from "partials/notice.html.j2" import notice %}
+{% block title %}
+  {% if form.errors %}Error: {% endif %}Signing keys — Repository Manager
+{% endblock %}
+{% block description %}
+  Manage the OpenPGP keys used to sign repository metadata.
+{% endblock %}
+{% block content %}
+  <h1>Signing keys</h1>
+  {% if request.query_params.get('created') %}
+    {{ notice('Key ' ~ request.query_params.get('created') ~ ' is ready to sign repositories.') }}
+  {% endif %}
+  {% if request.query_params.get('deleted') %}
+    {{ notice('Key ' ~ request.query_params.get('deleted') ~ ' was deleted.') }}
+  {% endif %}
+  {{ error_summary(form) }}
+  <p class="lede">
+    Private keys never leave this server: they are held in the application's own keyring and
+    cannot be exported through this interface. Public keys are downloadable by anyone, which
+    is how clients verify what they install.
+  </p>
+  {% if keys %}
+    {% call scrollable("Signing keys") %}
+      <table class="data-table">
+        <caption>Keys held by this instance.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Fingerprint</th>
+            <th scope="col">Type</th>
+            <th scope="col">Used by</th>
+            <th scope="col">Public key</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for key in keys %}
+            <tr>
+              <th scope="row">
+                <code>{{ key.name }}</code>
+              </th>
+              <td>
+                <code class="fingerprint">{{ key.short_id }}</code>
+              </td>
+              <td>{{ key.algorithm.label }}</td>
+              <td>
+                {% if key.repositories %}
+                  {{ key.repositories | map(attribute='name') | join(', ') }}
+                {% else %}
+                  <span class="muted">Not in use</span>
+                {% endif %}
+              </td>
+              <td>
+                <a href="{{ url_for('key_public', name=key.name) }}">Download<span class="visually-hidden"> the public key for {{ key.name }}</span></a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+  {% else %}
+    <p>No signing keys yet. Create one below before adding a repository.</p>
+  {% endif %}
+  {% if writes_enabled %}
+    <h2 id="generate">Generate a new key</h2>
+    <form method="post"
+          action="{{ url_for('key_create') }}"
+          class="stacked-form">
+      <input type="hidden" name="action" value="generate">
+      {{ text_field(form, 'name', 'Key name', required=True,
+        hint='Lowercase letters, digits and hyphens. Used in the filename clients trust, e.g. internal.asc.') }}
+      {{ text_field(form, 'display_name', 'Owner or repository name', required=True,
+        hint='Appears in the key\'s user ID, so people can tell what it signs.') }}
+      {{ select_field(form, 'algorithm', 'Key type', algorithms,
+        hint='RSA 4096 is the most widely compatible. Ed25519 is smaller and faster.') }}
+      <p class="field-hint">A passphrase is generated automatically and stored in the keyring directory.</p>
+      <button type="submit" class="button-primary">Generate key</button>
+    </form>
+    <h2 id="import">Import an existing key</h2>
+    <form method="post"
+          action="{{ url_for('key_create') }}"
+          class="stacked-form">
+      <input type="hidden" name="action" value="import">
+      {{ text_field(form, 'name', 'Key name', required=True,
+        hint='How this instance will refer to the key.') }}
+      {{ textarea_field(form, 'armored', 'Armoured private key', required=True, rows=8,
+        hint='The output of gpg --armor --export-secret-keys. The private half is required: a public key cannot sign.') }}
+      {{ text_field(form, 'passphrase', 'Passphrase', type='password',
+        hint='Leave blank if the key has no passphrase. It is stored in the keyring directory, never in the database.') }}
+      <button type="submit" class="button-primary">Import key</button>
+    </form>
+  {% else %}
+    <h2>Adding keys</h2>
+    <p class="callout">
+      Key management is disabled on this instance. It is guarded by administrator login,
+      which arrives in a later release.
+    </p>
+  {% endif %}
+{% endblock %}
