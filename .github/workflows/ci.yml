@@ -29,7 +29,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install
-        run: uv sync --all-extras --dev
+        run: uv sync --all-extras --all-groups
 
       # Runs the identical hook set developers get locally, so CI can never fail
       # on something a commit could have caught (specification.md 14.2).
@@ -57,7 +57,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
-        run: uv sync --all-extras --dev
+        run: uv sync --all-extras --all-groups
 
       - name: Test
         run: >
@@ -76,7 +76,12 @@ jobs:
     runs-on: ubuntu-latest
     services:
       openldap:
-        image: bitnami/openldap:2.6
+        # Bitnami retired its public catalogue in 2025 and `bitnami/openldap:2.6`
+        # now 404s; the archived copy under `bitnamilegacy` keeps the same
+        # env-var contract. Digest-pinned because the archive is frozen and the
+        # tag will never legitimately move. Revisit at M2, when real LDAP tests
+        # land and a maintained fixture can be validated against them.
+        image: bitnamilegacy/openldap@sha256:687f14a22b5c74fb057a57221acdbe7b8c82e2d3619fc380db3af48ec4aa04ed
         ports: ["1389:1389"]
         env:
           LDAP_ROOT: dc=example,dc=test
@@ -102,7 +107,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install
-        run: uv sync --all-extras --dev
+        run: uv sync --all-extras --all-groups
 
       # Signing keys are generated per run and never stored as secrets (14.3).
       - name: Integration tests
@@ -132,7 +137,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install
-        run: uv sync --all-extras --dev
+        run: uv sync --all-extras --all-groups
 
       - name: Install browsers
         run: uv run playwright install --with-deps chromium

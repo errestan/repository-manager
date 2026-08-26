@@ -25,9 +25,19 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
-      - run: uv sync --all-extras --dev
+      - run: uv sync --all-extras --all-groups
+      # Audit the exported lockfile rather than the installed environment: the
+      # project itself is unpublished, so auditing the environment makes
+      # --strict fail on "not found on PyPI" forever. --no-emit-project drops
+      # it; the export is fully pinned, so --no-deps/--disable-pip skip
+      # resolution entirely and --strict keeps its real meaning -- every
+      # third-party dependency was actually audited.
       - name: pip-audit
-        run: uv run pip-audit --strict --desc
+        run: |
+          uv export --format requirements-txt --no-emit-project \
+            --all-extras --all-groups --quiet > requirements-audit.txt
+          uv run pip-audit --strict --desc --no-deps --disable-pip \
+            -r requirements-audit.txt
 
   codeql:
     name: CodeQL

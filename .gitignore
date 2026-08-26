@@ -41,3 +41,6 @@ secrets/
 .vscode/
 *.swp
 .DS_Store
+
+# Written by the pip-audit CI step (and by local reproductions of it).
+requirements-audit.txt
