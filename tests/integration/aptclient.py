@@ -68,11 +68,15 @@ class IsolatedApt:
         ]  # fmt: skip
 
     def _run(self, binary: str, *arguments: str) -> AptResult:
+        # cwd is the isolated base, not wherever pytest was started: `apt-get
+        # download` writes the .deb into the working directory, and a test has
+        # no business leaving files in the checkout.
         completed = subprocess.run(
             [binary, *self._options(), *arguments],
             capture_output=True,
             text=True,
             check=False,
+            cwd=self.base,
         )
         return AptResult(completed.returncode, completed.stdout, completed.stderr)
 
@@ -99,3 +103,7 @@ class IsolatedApt:
         """Fetch the .deb itself, which checks its hash against the index."""
         assert APT_GET is not None
         return self._run(APT_GET, "download", package)
+
+    def downloaded(self) -> list[Path]:
+        """Packages `download` placed in the working directory."""
+        return sorted(self.base.glob("*.deb"))
