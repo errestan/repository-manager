@@ -1,0 +1,91 @@
+# See specification.md 14.2.  Only fast hooks run at commit time; the test suite
+# belongs in CI (.github/workflows/ci.yml), which also runs `pre-commit run
+# --all-files` so local and CI can never disagree about style.
+#
+# Setup:  uv sync && uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
+
+default_language_version:
+  python: python3
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^LICENSE$
+      - id: end-of-file-fixer
+        exclude: ^LICENSE$
+      - id: mixed-line-ending
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: debug-statements
+      # This project handles GPG material in docs, tests, and fixtures.
+      - id: detect-private-key
+      # Package fixtures are committed deliberately, but a stray 200MB .rpm is not.
+      - id: check-added-large-files
+        args: [--maxkb=2048]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # mypy runs from the uv-synced environment rather than an isolated hook venv, so
+  # it type-checks against the real dependency set (fastapi, ldap3, pytest, ...)
+  # instead of reporting phantom missing-import errors.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+
+  - repo: https://github.com/Riverside-Healthcare/djLint
+    rev: v1.44.2
+    hooks:
+      - id: djlint-jinja
+        files: \.html\.j2$
+      - id: djlint-reformat-jinja
+        files: \.html\.j2$
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.3
+    hooks:
+      - id: codespell
+        additional_dependencies: [tomli]
+        exclude: ^(LICENSE|uv\.lock)$
+
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.12.6
+    hooks:
+      - id: uv-lock
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+
+  # Project-specific checks (specification.md 14.2).
+  - repo: local
+    hooks:
+      - id: no-absolute-urls
+        name: no root-relative URLs in templates (sub-path safety, AD-14)
+        entry: python3 scripts/no_absolute_urls.py
+        language: system
+        files: \.html\.j2$
+
+      - id: alembic-heads
+        name: migrations must have exactly one head
+        entry: python3 scripts/alembic_heads.py
+        language: system
+        pass_filenames: false
+        files: ^(alembic/|alembic\.ini$)

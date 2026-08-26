@@ -1,0 +1,177 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "repository-manager"
+description = "Web interface for managing the contents of Linux package repositories (APT/RPM)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Lee" }]
+keywords = ["apt", "rpm", "repository", "packaging", "debian", "fastapi"]
+dynamic = ["version"]
+
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Web Environment",
+  "Framework :: FastAPI",
+  "Intended Audience :: System Administrators",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: System :: Software Distribution",
+]
+
+# Licence note (see specification.md 14.1): this project is GPL-3.0-or-later because
+# python-debian (GPL-2.0-or-later) is imported directly. ldap3 is LGPL-3, which is
+# compatible with GPL-3 but NOT with GPL-2-only. Any new dependency must be
+# GPL-3-compatible; the `licences` CI step enforces this.
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "jinja2>=3.1.4",
+  "python-multipart>=0.0.18",
+  "sqlalchemy[asyncio]>=2.0.36",
+  "alembic>=1.14",
+  "aiosqlite>=0.20",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "ldap3>=2.9.1",
+  "python-debian>=0.1.49",
+  "rpmfile>=2.1",
+  "structlog>=24.4",
+]
+
+[project.optional-dependencies]
+postgres = ["asyncpg>=0.30"]
+metrics = ["prometheus-client>=0.21"]
+
+[project.urls]
+Homepage = "https://github.com/errestan/repository-manager"
+Source = "https://github.com/errestan/repository-manager"
+Issues = "https://github.com/errestan/repository-manager/issues"
+
+[project.scripts]
+repository-manager = "repository_manager.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "pytest-cov>=6.0",
+  "httpx>=0.28",
+  "mypy>=1.13",
+  "ruff>=0.8",
+  "pre-commit>=4.0",
+  "pip-audit>=2.7",
+  "pip-licenses>=5.0",
+  "djlint>=1.36",
+]
+e2e = [
+  "pytest-playwright>=0.6",
+  "axe-playwright-python>=0.1.4",
+]
+
+[tool.hatch.version]
+path = "src/repository_manager/__about__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/repository_manager"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/", "tests/", "LICENSE", "README.md", "pyproject.toml"]
+
+# --------------------------------------------------------------------------- ruff
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",      # pycodestyle
+  "F",           # pyflakes
+  "I",           # isort
+  "N",           # pep8-naming
+  "UP",          # pyupgrade
+  "B",           # bugbear
+  "A",           # builtins shadowing
+  "C4",          # comprehensions
+  "DTZ",         # naive datetimes — repository metadata is timestamped in UTC
+  "T20",         # no print()
+  "PT",          # pytest style
+  "RET",         # return simplification
+  "SIM",         # simplify
+  "PTH",         # use pathlib
+  "S",           # bandit-equivalent security rules
+  "RUF",
+]
+ignore = [
+  "S101",  # assert — allowed; pytest relies on it
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "PLR2004"]
+"scripts/**" = ["T20"]  # hook scripts report to stdout by design
+"src/repository_manager/cli.py" = ["T20"]  # a CLI is allowed to talk to the terminal
+
+[tool.ruff.lint.isort]
+known-first-party = ["repository_manager"]
+
+# --------------------------------------------------------------------------- mypy
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "tests", "scripts"]
+plugins = ["pydantic.mypy"]
+# Overrides below are declared ahead of the modules they target (they land in M1/M2).
+# Flip back to true once those modules exist, to catch genuinely stale sections.
+warn_unused_configs = false
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+
+# Strict mode on the modules where a type error becomes a correctness or security
+# bug: metadata generation must not emit a malformed index, and the permission
+# layer must not silently widen access. See specification.md 14.2.
+[[tool.mypy.overrides]]
+module = ["repository_manager.metadata.*", "repository_manager.security.*"]
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["debian.*", "rpmfile.*", "ldap3.*"]
+ignore_missing_imports = true
+
+# --------------------------------------------------------------------------- pytest
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "--strict-markers --strict-config"
+markers = [
+  "integration: requires external services (OpenLDAP, createrepo_c, apt/dnf)",
+  "e2e: browser-driven test via Playwright",
+]
+
+[tool.coverage.run]
+source = ["src/repository_manager"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
+
+# --------------------------------------------------------------------------- djlint
+
+[tool.djlint]
+profile = "jinja"
+extension = "html.j2"
+indent = 2
+max_line_length = 120

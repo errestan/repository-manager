@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Verify tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION="$(uv run python -c 'import tomllib,pathlib,re;
+          src=pathlib.Path("src/repository_manager/__about__.py").read_text();
+          print(re.search(r"\"([^\"]+)\"", src).group(1))')"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "Tag v$TAG does not match __about__.__version__ ($VERSION)" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: uv build
+
+      - name: Check metadata
+        run: uvx twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Protected environment: PyPI publication requires a human-approved gate.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/repository-manager
+    permissions:
+      # Trusted Publishing (OIDC) -- no long-lived PyPI token exists to leak.
+      # This is the only job in the repository granted id-token: write.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

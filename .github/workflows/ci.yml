@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Superseded runs on the same branch are pointless; cancel them.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  lint:
+    name: Lint, types and licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install
+        run: uv sync --all-extras --dev
+
+      # Runs the identical hook set developers get locally, so CI can never fail
+      # on something a commit could have caught (specification.md 14.2).
+      - name: pre-commit
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
+      # Guards the GPL-3 boundary against a GPL-2-only transitive upgrade (14.1).
+      - name: Dependency licences
+        run: uv run python scripts/check_licences.py
+
+  test:
+    name: Unit tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: uv sync --all-extras --dev
+
+      - name: Test
+        run: >
+          uv run pytest -m "not integration and not e2e"
+          --cov --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+
+  integration:
+    name: Integration (real apt/dnf/LDAP)
+    runs-on: ubuntu-latest
+    services:
+      openldap:
+        image: bitnami/openldap:2.6
+        ports: ["1389:1389"]
+        env:
+          LDAP_ROOT: dc=example,dc=test
+          LDAP_ADMIN_USERNAME: admin
+          LDAP_ADMIN_PASSWORD: adminpassword
+          LDAP_USERS: alice,bob
+          LDAP_PASSWORDS: alicepass,bobpass
+          LDAP_GROUP: repo-admins
+    steps:
+      - uses: actions/checkout@v4
+
+      # createrepo_c generates RPM metadata; apt/dnf are what actually prove the
+      # generated repositories are valid (AD-2). These are the point of this job.
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            createrepo-c gnupg dpkg-dev apt-utils dnf
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install
+        run: uv sync --all-extras --dev
+
+      # Signing keys are generated per run and never stored as secrets (14.3).
+      - name: Integration tests
+        env:
+          REPOMAN_LDAP_URL: ldap://127.0.0.1:1389
+          REPOMAN_LDAP_ALLOW_INSECURE: "true"
+          REPOMAN_LDAP_BIND_DN: cn=admin,dc=example,dc=test
+          REPOMAN_LDAP_BIND_PASSWORD: adminpassword
+          REPOMAN_LDAP_USER_BASE_DN: ou=users,dc=example,dc=test
+        run: uv run pytest -m integration -v
+
+  e2e:
+    name: Browser and accessibility (mounted at ${{ matrix.mount || '/' }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # AD-14: the application must behave identically at a domain root and at a
+        # sub-path. Running the whole suite twice is what keeps that from regressing.
+        mount: ["", "/repoman"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install
+        run: uv sync --all-extras --dev
+
+      - name: Install browsers
+        run: uv run playwright install --with-deps chromium
+
+      - name: End-to-end and axe-core tests
+        env:
+          REPOMAN_ROOT_PATH: ${{ matrix.mount }}
+        run: uv run pytest -m e2e -v
+
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.mount == '' && 'root' || 'subpath' }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore

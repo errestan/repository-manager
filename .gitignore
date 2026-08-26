@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Playwright
+test-results/
+playwright-report/
+
+# Application runtime state — never commit these
+*.db
+*.sqlite3
+repoman.db
+gnupg/
+.env
+.env.*
+!.env.example
+secrets/
+
+# Package artifacts used as test fixtures are committed deliberately under
+# tests/fixtures/; stray ones anywhere else are not.
+/*.deb
+/*.rpm
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
