@@ -117,7 +117,7 @@ jobs:
           REPOMAN_LDAP_BIND_DN: cn=admin,dc=example,dc=test
           REPOMAN_LDAP_BIND_PASSWORD: adminpassword
           REPOMAN_LDAP_USER_BASE_DN: ou=users,dc=example,dc=test
-        run: uv run pytest -m integration -v
+        run: scripts/run_marked_tests.sh integration M2
 
   e2e:
     name: Browser and accessibility (mounted at ${{ matrix.mount || '/' }})
@@ -145,7 +145,7 @@ jobs:
       - name: End-to-end and axe-core tests
         env:
           REPOMAN_ROOT_PATH: ${{ matrix.mount }}
-        run: uv run pytest -m e2e -v
+        run: scripts/run_marked_tests.sh e2e M4
 
       - name: Upload report on failure
         if: failure()

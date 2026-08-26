@@ -755,6 +755,13 @@ Notes:
 
 - The `integration` and `e2e` jobs are the ones that actually protect AD-2 and AD-14; they
   are required status checks, not optional.
+- Their markers are declared from the start but are only populated at M2 and M4. Until
+  then `pytest` collects nothing and exits 5, which CI cannot distinguish from a failure,
+  so both jobs run via `scripts/run_marked_tests.sh`, which treats *only* exit 5 as a pass
+  and emits a GitHub notice saying so. Collection errors and genuine test failures still
+  fail the job. **Delete the guard once both markers carry tests** — after M4 it should
+  never fire again, and leaving it in place risks masking a suite that has silently
+  stopped collecting.
 - `id-token: write` is granted only in `release.yml`, and only in the publish job.
 - Dependabot is enabled for `pip`, `github-actions`, and `docker`, grouped into weekly PRs.
 - Because CI generates and consumes signed repositories, test signing keys are **generated

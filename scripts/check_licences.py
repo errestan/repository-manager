@@ -54,6 +54,13 @@ DENIED_EXACT = (
 # verified by hand.  Keep this list short and justified.
 KNOWN: dict[str, str] = {
     "repository-manager": "GPL-3.0-or-later",
+    # PyPI metadata carries no licence at all (neither `license` nor a
+    # classifier), so the hook fails closed on it.  Verified by hand against
+    # github.com/pamelafox/axe-playwright-python/LICENSE: "MIT License,
+    # Copyright (c) 2022 Ruslan Iskov, Pamela Fox".  It also vendors axe-core
+    # as axe.min.js, which is MPL-2.0 -- GPL-3-compatible, and in ALLOWED
+    # already.  Test-only, so neither is distributed in the wheel or image.
+    "axe-playwright-python": "MIT",
 }
 
 
