@@ -63,8 +63,15 @@ def test_csp_nonce_changes_between_responses(client: TestClient) -> None:
     assert first != second
 
 
-def test_hsts_is_absent_over_plain_http(client: TestClient) -> None:
-    assert "strict-transport-security" not in client.get("/").headers
+def test_hsts_is_absent_over_plain_http(app: FastAPI) -> None:
+    """A client reaching the app over http gets no HSTS, whatever the config says.
+
+    Built with its own http client rather than the shared fixture: that one
+    addresses the https public URL, because session cookies are Secure and would
+    otherwise never be sent (see tests/conftest.py).
+    """
+    with TestClient(app) as plain:
+        assert "strict-transport-security" not in plain.get("/").headers
 
 
 def test_hsts_is_sent_over_https_via_a_trusted_proxy(make_app: AppFactory) -> None:

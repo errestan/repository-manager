@@ -1,0 +1,8 @@
+{#
+  The per-session CSRF token (specification.md 7.3).
+
+  Included by every form that changes state.  A form that omits it is refused
+  by the security gate rather than quietly accepted, so forgetting it produces
+  a visible error, not an unprotected endpoint.
+#}
+<input type="hidden" name="_csrf" value="{{ csrf_token }}">

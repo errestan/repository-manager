@@ -67,7 +67,7 @@
       </p>
     </div>
   {% endif %}
-  {% if writes_enabled %}
+  {% if identity.can_admin %}
     <p>
       <a href="{{ url_for('repository_new') }}">Create a repository</a>
     </p>

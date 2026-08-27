@@ -8,33 +8,46 @@ import pytest
 
 from repository_manager.config import ConfigError, load_settings, required_variables
 
+# The directory settings became required in M3: with no directory there is no
+# way to sign in, and therefore no way to change anything (12, 7.1).
+LDAP: dict[str, object] = {
+    "ldap_url": "ldaps://directory.example.test",
+    "ldap_user_base_dn": "ou=people,dc=example,dc=test",
+    "ldap_group_admin": "cn=repo-admins,ou=groups,dc=example,dc=test",
+    "ldap_group_maintainer": "cn=repo-maintainers,ou=groups,dc=example,dc=test",
+}
+
 BASE: dict[str, object] = {
     "allowed_roots": "/srv/repositories",
     "public_url": "https://packages.example.test",
     "secret_key": "s" * 32,
+    **LDAP,
+}
+
+REQUIRED = {
+    "REPOMAN_ALLOWED_ROOTS",
+    "REPOMAN_PUBLIC_URL",
+    "REPOMAN_SECRET_KEY",
+    "REPOMAN_LDAP_URL",
+    "REPOMAN_LDAP_GROUP_ADMIN",
+    "REPOMAN_LDAP_GROUP_MAINTAINER",
 }
 
 
-def test_required_variables_are_the_three_with_no_default() -> None:
-    assert set(required_variables()) == {
-        "REPOMAN_ALLOWED_ROOTS",
-        "REPOMAN_PUBLIC_URL",
-        "REPOMAN_SECRET_KEY",
-    }
+def test_required_variables_have_no_default() -> None:
+    assert set(required_variables()) == REQUIRED
 
 
 def test_load_settings_reports_every_missing_variable_at_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("REPOMAN_ALLOWED_ROOTS", raising=False)
-    monkeypatch.delenv("REPOMAN_PUBLIC_URL", raising=False)
-    monkeypatch.delenv("REPOMAN_SECRET_KEY", raising=False)
+    for name in REQUIRED:
+        monkeypatch.delenv(name, raising=False)
     with pytest.raises(ConfigError) as excinfo:
         load_settings()
     message = str(excinfo.value)
-    assert "REPOMAN_ALLOWED_ROOTS" in message
-    assert "REPOMAN_PUBLIC_URL" in message
-    assert "REPOMAN_SECRET_KEY" in message
+    for name in REQUIRED:
+        assert name in message, name
 
 
 @pytest.mark.parametrize(
@@ -149,6 +162,10 @@ def test_settings_from_a_toml_file(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         'allowed_roots = "/srv/from-toml"\n'
         'public_url = "https://toml.example.test"\n'
         'secret_key = "k"\n'
+        'ldap_url = "ldaps://directory.example.test"\n'
+        'ldap_user_base_dn = "ou=people,dc=example,dc=test"\n'
+        'ldap_group_admin = "cn=repo-admins,ou=groups,dc=example,dc=test"\n'
+        'ldap_group_maintainer = "cn=repo-maintainers,ou=groups,dc=example,dc=test"\n'
         "job_concurrency = 7\n",
         encoding="utf-8",
     )
@@ -178,7 +195,7 @@ def test_secret_can_be_supplied_by_file(tmp_path: Path, monkeypatch: pytest.Monk
     secret = tmp_path / "secret"
     secret.write_text("from-a-file\n", encoding="utf-8")
     monkeypatch.setenv("REPOMAN_SECRET_KEY_FILE", str(secret))
-    settings = load_settings(allowed_roots="/srv/x", public_url="https://host")
+    settings = load_settings(allowed_roots="/srv/x", public_url="https://host", **LDAP)
     # The trailing newline that `echo secret > file` leaves behind is stripped.
     assert settings.secret_key.get_secret_value() == "from-a-file"
 
@@ -186,4 +203,137 @@ def test_secret_can_be_supplied_by_file(tmp_path: Path, monkeypatch: pytest.Monk
 def test_missing_secret_file_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("REPOMAN_SECRET_KEY_FILE", str(tmp_path / "absent"))
     with pytest.raises(ConfigError, match="cannot read"):
-        load_settings(allowed_roots="/srv/x", public_url="https://host")
+        load_settings(allowed_roots="/srv/x", public_url="https://host", **LDAP)
+
+
+# --------------------------------------------------------------- directory (7.1)
+
+
+def test_ldaps_is_accepted() -> None:
+    assert load_settings(**BASE).ldap_uses_tls is True
+
+
+def test_plain_ldap_is_refused_by_default() -> None:
+    """The bind password crosses this connection in clear text (7.1)."""
+    with pytest.raises(ConfigError, match="clear text"):
+        load_settings(**{**BASE, "ldap_url": "ldap://directory.example.test"})
+
+
+def test_plain_ldap_is_accepted_with_start_tls() -> None:
+    settings = load_settings(
+        **{**BASE, "ldap_url": "ldap://directory.example.test", "ldap_start_tls": True}
+    )
+    assert settings.ldap_uses_tls is True
+
+
+def test_plain_ldap_is_accepted_when_explicitly_allowed_outside_production() -> None:
+    settings = load_settings(
+        **{
+            **BASE,
+            "ldap_url": "ldap://directory.example.test",
+            "ldap_allow_insecure": True,
+            "env": "development",
+        }
+    )
+    assert settings.ldap_uses_tls is False
+
+
+def test_the_insecure_escape_hatch_is_refused_in_production() -> None:
+    with pytest.raises(ConfigError, match="production"):
+        load_settings(
+            **{
+                **BASE,
+                "ldap_url": "ldap://directory.example.test",
+                "ldap_allow_insecure": True,
+                "env": "production",
+            }
+        )
+
+
+@pytest.mark.parametrize("value", ["directory.example.test", "https://directory", "ldapi://x"])
+def test_the_ldap_url_must_be_an_ldap_url(value: str) -> None:
+    with pytest.raises(ConfigError):
+        load_settings(**{**BASE, "ldap_url": value})
+
+
+def test_search_bind_mode_needs_a_user_base() -> None:
+    with pytest.raises(ConfigError, match="USER_BASE_DN"):
+        load_settings(**{**BASE, "ldap_user_base_dn": None})
+
+
+def test_the_user_filter_must_name_the_username() -> None:
+    with pytest.raises(ConfigError, match="username"):
+        load_settings(**{**BASE, "ldap_user_filter": "(uid=fixed)"})
+
+
+def test_direct_bind_mode_needs_a_dn_template() -> None:
+    with pytest.raises(ConfigError, match="USER_DN_TEMPLATE"):
+        load_settings(**{**BASE, "ldap_bind_mode": "direct"})
+
+
+def test_the_dn_template_must_name_the_username() -> None:
+    with pytest.raises(ConfigError, match="username"):
+        load_settings(
+            **{
+                **BASE,
+                "ldap_bind_mode": "direct",
+                "ldap_user_dn_template": "uid=fixed,ou=people,dc=example,dc=test",
+            }
+        )
+
+
+def test_group_search_mode_needs_a_group_base() -> None:
+    with pytest.raises(ConfigError, match="GROUP_BASE_DN"):
+        load_settings(**{**BASE, "ldap_group_mode": "search"})
+
+
+def test_the_group_filter_must_name_the_user_dn() -> None:
+    with pytest.raises(ConfigError, match="user_dn"):
+        load_settings(
+            **{
+                **BASE,
+                "ldap_group_mode": "search",
+                "ldap_group_base_dn": "ou=groups,dc=example,dc=test",
+                "ldap_group_filter": "(objectClass=groupOfNames)",
+            }
+        )
+
+
+def test_display_name_attributes_are_comma_separated() -> None:
+    settings = load_settings(**{**BASE, "ldap_display_name_attributes": "gecos, cn"})
+    assert settings.ldap_display_name_attributes == ("gecos", "cn")
+
+
+# --------------------------------------------------------------- sessions (7.2)
+
+
+def test_session_lifetimes_have_the_specified_defaults() -> None:
+    settings = load_settings(**BASE)
+    assert settings.session_idle_timeout.total_seconds() == 8 * 3600
+    assert settings.session_absolute_lifetime.total_seconds() == 24 * 3600
+    assert settings.session_revalidate_after.total_seconds() == 15 * 60
+
+
+def test_an_idle_timeout_longer_than_the_lifetime_is_refused() -> None:
+    """It could never fire, so accepting it would silently mean something else."""
+    with pytest.raises(ConfigError, match="never take effect"):
+        load_settings(
+            **{
+                **BASE,
+                "session_idle_timeout_minutes": 2880,
+                "session_absolute_lifetime_minutes": 1440,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "session_idle_timeout_minutes",
+        "session_absolute_lifetime_minutes",
+        "session_revalidate_minutes",
+    ],
+)
+def test_session_durations_must_be_positive(field: str) -> None:
+    with pytest.raises(ConfigError):
+        load_settings(**{**BASE, field: 0})

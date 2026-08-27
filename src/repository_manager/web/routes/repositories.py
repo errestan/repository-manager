@@ -1,7 +1,9 @@
 """Repository browsing and management (specification.md 8.1).
 
-Reads are anonymous (AD-11).  Writes go through ``require_write_access``, which
-stands in for the role check until LDAP login lands in M3.
+Reads are anonymous and unfiltered (AD-16): there is no hidden repository
+state, so no listing here is ever narrowed by who is asking.  Writes carry the
+role the permission matrix in specification.md 3 gives them -- maintainer for
+package operations, admin for the shape of the repository itself.
 
 Route order matters: ``/repositories/new`` is declared before
 ``/repositories/{slug}``, or the literal would be swallowed by the parameter.
@@ -18,7 +20,6 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from starlette.datastructures import UploadFile
-from starlette.formparsers import MultiPartException
 from starlette.responses import RedirectResponse, Response
 
 from repository_manager.config import Settings
@@ -26,6 +27,7 @@ from repository_manager.jobs.queue import JobQueue
 from repository_manager.models import (
     AptComponent,
     AptDistribution,
+    AuditAction,
     Job,
     Package,
     PackagePublication,
@@ -34,8 +36,8 @@ from repository_manager.models import (
     SigningKey,
 )
 from repository_manager.security.paths import resolve_within_roots
+from repository_manager.services import audit, publishing
 from repository_manager.services import packages as package_service
-from repository_manager.services import publishing
 from repository_manager.services import repositories as repository_service
 from repository_manager.services.packages import UploadError
 from repository_manager.services.repositories import (
@@ -44,25 +46,24 @@ from repository_manager.services.repositories import (
     parse_name_list,
 )
 from repository_manager.web.deps import (
+    MAX_FORM_FIELDS,
+    MAX_FORM_FILES,
+    Identity,
     db_session,
     get_queue,
     get_settings,
     get_templates,
-    require_write_access,
-    writes_enabled,
+    require_admin,
+    require_maintainer,
 )
 from repository_manager.web.forms import FormState, required
+from repository_manager.web.middleware import client_ip
 from repository_manager.web.templating import render
 
 router = APIRouter(tags=["repositories"])
 
 PACKAGES_PER_PAGE = 50
 UPLOAD_CHUNK_BYTES = 1024 * 1024
-
-# Enough parts for the upload field plus the target select, with headroom; a
-# request with more than this is not a form this application serves.
-MAX_FORM_FILES = 2
-MAX_FORM_FIELDS = 12
 
 _PUBLICATION_LOADS = (
     selectinload(Repository.distributions).selectinload(AptDistribution.components),
@@ -148,7 +149,7 @@ async def repository_list(
         get_templates(request),
         request,
         "repositories/list.html.j2",
-        {"repositories": repositories, "writes_enabled": writes_enabled(request)},
+        {"repositories": repositories},
     )
 
 
@@ -162,7 +163,6 @@ def _creation_context(request: Request, keys: list[SigningKey], form: FormState)
         # Pre-paired for the select macro: Jinja has no zip, and building the
         # pairs in the template would need the `do` extension.
         "key_options": [(key.id, f"{key.name} ({key.algorithm.label})") for key in keys],
-        "writes_enabled": writes_enabled(request),
     }
 
 
@@ -176,7 +176,7 @@ async def _signing_keys(session: AsyncSession) -> list[SigningKey]:
     "/repositories/new",
     include_in_schema=False,
     name="repository_new",
-    dependencies=[Depends(require_write_access)],
+    dependencies=[Depends(require_admin)],
 )
 async def repository_new(
     request: Request, session: Annotated[AsyncSession, Depends(db_session)]
@@ -211,11 +211,11 @@ def _retention(form: FormState, choice: str, count: str) -> int:
     "/repositories/new",
     include_in_schema=False,
     name="repository_create",
-    dependencies=[Depends(require_write_access)],
 )
 async def repository_create(
     request: Request,
     session: Annotated[AsyncSession, Depends(db_session)],
+    identity: Annotated[Identity, Depends(require_admin)],
     name: Annotated[str, Form()] = "",
     root_path: Annotated[str, Form()] = "",
     description: Annotated[str, Form()] = "",
@@ -288,6 +288,7 @@ async def repository_create(
             retention_count=keep,
             origin=origin,
             label=label,
+            actor=identity.user_dn,
             distributions=(
                 DistributionSpec(
                     codename=clean_codename,
@@ -307,6 +308,15 @@ async def repository_create(
             status_code=400,
         )
 
+    await audit.record(
+        session,
+        action=AuditAction.REPOSITORY_CREATE,
+        actor=identity.user_dn,
+        repository_id=repository.id,
+        target=repository.slug,
+        source_ip=client_ip(request.scope),
+        details={"name": repository.name, "root_path": repository.root_path},
+    )
     return RedirectResponse(
         request.url_for("repository_detail", slug=repository.slug),
         status_code=status.HTTP_303_SEE_OTHER,
@@ -346,7 +356,6 @@ async def repository_detail(
             # must be absolute and built from the external URL (13.5, 4.4).
             "base_url": settings.repository_url(repository.slug),
             "client_snippet": _client_snippet(settings, repository),
-            "writes_enabled": writes_enabled(request),
         },
     )
 
@@ -421,7 +430,6 @@ async def repository_packages(
             "query": query,
             "architecture": architecture,
             "architectures": architectures,
-            "writes_enabled": writes_enabled(request),
         },
     )
 
@@ -455,7 +463,6 @@ def _upload_context(request: Request, repository: Repository, form: FormState) -
         "repository": repository,
         "form": form,
         "targets": _targets(repository),
-        "writes_enabled": writes_enabled(request),
     }
 
 
@@ -463,7 +470,7 @@ def _upload_context(request: Request, repository: Repository, form: FormState) -
     "/repositories/{slug}/packages/upload",
     include_in_schema=False,
     name="repository_upload_form",
-    dependencies=[Depends(require_write_access)],
+    dependencies=[Depends(require_maintainer)],
 )
 async def repository_upload_form(
     request: Request, slug: str, session: Annotated[AsyncSession, Depends(db_session)]
@@ -486,13 +493,13 @@ async def _chunks(upload: UploadFile) -> AsyncIterator[bytes]:
     "/repositories/{slug}/packages/upload",
     include_in_schema=False,
     name="repository_upload",
-    dependencies=[Depends(require_write_access)],
 )
 async def repository_upload(
     request: Request,
     slug: str,
     session: Annotated[AsyncSession, Depends(db_session)],
     queue: Annotated[JobQueue, Depends(get_queue)],
+    identity: Annotated[Identity, Depends(require_maintainer)],
 ) -> Response:
     repository = await _load(session, slug)
     settings = get_settings(request)
@@ -509,9 +516,19 @@ async def repository_upload(
         )
 
     try:
-        # The form is parsed here rather than through `File(...)` so the size cap
-        # is the configured one.  Starlette's default max_part_size is 1 MiB,
-        # which would reject essentially every real package (5.1).
+        # Parsed here rather than through `File(...)` so the limits are this
+        # application's rather than Starlette's defaults.  There is deliberately
+        # no `except MultiPartException` around this: Starlette converts that
+        # into `HTTPException(400)` itself whenever a request is in scope, so
+        # such a handler would be unreachable, and the 400 renders through the
+        # application's own HTML error page.  `max_part_size`
+        # bounds non-file fields only -- an uploaded file streams to a spooled
+        # temporary file and is capped by `stage_upload` instead (5.1) -- but it
+        # is set from the configured limit so the two cannot disagree.
+        #
+        # If the CSRF check already read the body (the no-JavaScript path, where
+        # the token is a form field), this returns that same parsed form; the
+        # limits are identical by construction, since both come from deps.
         async with request.form(
             max_files=MAX_FORM_FILES,
             max_fields=MAX_FORM_FIELDS,
@@ -537,12 +554,6 @@ async def repository_upload(
                 _chunks(upload),
                 max_bytes=settings.max_upload_bytes,
             )
-    except MultiPartException as exc:
-        return reject(
-            f"The upload was rejected before it finished: {exc.message} "
-            f"The limit is {settings.max_upload_bytes:,} bytes.",
-            code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-        )
     except UploadError as exc:
         return reject(str(exc), code=exc.status_code)
 
@@ -554,10 +565,29 @@ async def repository_upload(
             distribution=distribution,
             component=component,
             staged=staged,
+            actor=identity.user_dn,
         )
     except UploadError as exc:
         return reject(str(exc), code=exc.status_code)
 
+    await audit.record(
+        session,
+        action=AuditAction.PACKAGE_UPLOAD,
+        actor=identity.user_dn,
+        repository_id=repository.id,
+        target=outcome.package.relative_path,
+        source_ip=client_ip(request.scope),
+        details={
+            "name": outcome.package.name,
+            "version": outcome.package.version,
+            "architecture": outcome.package.architecture,
+            "distribution": distribution.codename,
+            "component": component.name,
+            # False means the identical file was already published here, which
+            # is a successful no-op rather than a new package (5.1).
+            "created": outcome.created,
+        },
+    )
     if outcome.created:
         await publishing.request_regeneration(session, queue, repository)
     # Commit before waking a worker: the job row has to be visible to the other
@@ -577,7 +607,6 @@ async def repository_upload(
     "/repositories/{slug}/packages/{publication_id}/delete",
     include_in_schema=False,
     name="repository_package_delete",
-    dependencies=[Depends(require_write_access)],
 )
 async def repository_package_delete(
     request: Request,
@@ -585,16 +614,27 @@ async def repository_package_delete(
     publication_id: int,
     session: Annotated[AsyncSession, Depends(db_session)],
     queue: Annotated[JobQueue, Depends(get_queue)],
+    identity: Annotated[Identity, Depends(require_maintainer)],
 ) -> Response:
     repository = await _load(session, slug)
     settings = get_settings(request)
     try:
         publication = await package_service.load_publication(session, repository, publication_id)
         name = publication.package.name
+        version = publication.package.version
         await package_service.remove_publication(session, settings, repository, publication)
     except UploadError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
+    await audit.record(
+        session,
+        action=AuditAction.PACKAGE_REMOVE,
+        actor=identity.user_dn,
+        repository_id=repository.id,
+        target=name,
+        source_ip=client_ip(request.scope),
+        details={"name": name, "version": version},
+    )
     await publishing.request_regeneration(session, queue, repository)
     await session.commit()
     queue.wake()
@@ -613,16 +653,27 @@ async def repository_package_delete(
     "/repositories/{slug}/regenerate",
     include_in_schema=False,
     name="repository_regenerate",
-    dependencies=[Depends(require_write_access)],
 )
 async def repository_regenerate(
     request: Request,
     slug: str,
     session: Annotated[AsyncSession, Depends(db_session)],
     queue: Annotated[JobQueue, Depends(get_queue)],
+    identity: Annotated[Identity, Depends(require_maintainer)],
 ) -> Response:
     repository = await _load(session, slug)
-    job_id = await publishing.request_regeneration(session, queue, repository, actor="web")
+    job_id = await publishing.request_regeneration(
+        session, queue, repository, actor=identity.user_dn
+    )
+    await audit.record(
+        session,
+        action=AuditAction.REGENERATE,
+        actor=identity.user_dn,
+        repository_id=repository.id,
+        target=repository.slug,
+        source_ip=client_ip(request.scope),
+        details={"job_id": job_id},
+    )
     await session.commit()
     queue.wake()
     return RedirectResponse(
@@ -634,7 +685,7 @@ async def repository_regenerate(
     "/repositories/{slug}/distributions",
     include_in_schema=False,
     name="repository_distributions",
-    dependencies=[Depends(require_write_access)],
+    dependencies=[Depends(require_admin)],
 )
 async def repository_distributions(
     request: Request, slug: str, session: Annotated[AsyncSession, Depends(db_session)]
@@ -647,7 +698,6 @@ async def repository_distributions(
         {
             "repository": repository,
             "form": FormState(values={"components": "main", "architectures": "amd64"}),
-            "writes_enabled": writes_enabled(request),
         },
     )
 
@@ -656,13 +706,13 @@ async def repository_distributions(
     "/repositories/{slug}/distributions",
     include_in_schema=False,
     name="repository_distribution_add",
-    dependencies=[Depends(require_write_access)],
 )
 async def repository_distribution_add(
     request: Request,
     slug: str,
     session: Annotated[AsyncSession, Depends(db_session)],
     queue: Annotated[JobQueue, Depends(get_queue)],
+    identity: Annotated[Identity, Depends(require_admin)],
     codename: Annotated[str, Form()] = "",
     suite: Annotated[str, Form()] = "",
     components: Annotated[str, Form()] = "",
@@ -708,11 +758,20 @@ async def repository_distribution_add(
             get_templates(request),
             request,
             "repositories/distributions.html.j2",
-            {"repository": repository, "form": form, "writes_enabled": True},
+            {"repository": repository, "form": form},
             status_code=400,
         )
 
-    await publishing.request_regeneration(session, queue, repository, actor="web")
+    await audit.record(
+        session,
+        action=AuditAction.DISTRIBUTION_ADD,
+        actor=identity.user_dn,
+        repository_id=repository.id,
+        target=clean_codename,
+        source_ip=client_ip(request.scope),
+        details={"components": component_names, "architectures": architecture_names},
+    )
+    await publishing.request_regeneration(session, queue, repository, actor=identity.user_dn)
     await session.commit()
     queue.wake()
     return RedirectResponse(

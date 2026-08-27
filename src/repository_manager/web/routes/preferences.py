@@ -13,6 +13,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 from starlette import status
 
+from repository_manager.auth import is_local_path
 from repository_manager.config import Settings
 from repository_manager.web.templating import (
     DEFAULT_THEME,
@@ -32,7 +33,7 @@ def _safe_redirect_target(request: Request, candidate: str | None) -> str:
     """
     root_path = request.scope.get("root_path", "")
     fallback = str(request.url_for("repository_list"))
-    if not candidate or not candidate.startswith("/") or candidate.startswith("//"):
+    if not candidate or not is_local_path(candidate):
         return fallback
     if root_path and not (candidate == root_path or candidate.startswith(root_path + "/")):
         return fallback

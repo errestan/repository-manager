@@ -3,6 +3,9 @@
 Public keys are downloadable by anyone -- clients need them to verify the
 repository.  Private keys have no route at all: there is no export endpoint to
 guard, because the capability is absent from the GnuPG wrapper itself.
+
+Key management is admin-only (3): a signing key is the thing every client
+trusts, so replacing one is as consequential as anything in this application.
 """
 
 from __future__ import annotations
@@ -15,17 +18,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from starlette.responses import RedirectResponse, Response
 
-from repository_manager.models import KEY_NAME_PATTERN, KeyAlgorithm, SigningKey
+from repository_manager.models import (
+    KEY_NAME_PATTERN,
+    AuditAction,
+    KeyAlgorithm,
+    SigningKey,
+)
+from repository_manager.services import audit
 from repository_manager.services import keys as key_service
 from repository_manager.services.keys import KeyServiceError
 from repository_manager.web.deps import (
+    Identity,
     db_session,
     get_settings,
     get_templates,
-    require_write_access,
-    writes_enabled,
+    require_admin,
 )
 from repository_manager.web.forms import FormState, required
+from repository_manager.web.middleware import client_ip
 from repository_manager.web.templating import render
 
 router = APIRouter(tags=["keys"])
@@ -52,7 +62,6 @@ def _page(
             "keys": keys,
             "form": form,
             "algorithms": [(member.value, member.label) for member in KeyAlgorithm],
-            "writes_enabled": writes_enabled(request),
         },
         status_code=status_code,
     )
@@ -69,11 +78,11 @@ async def key_list(
     "/keys",
     include_in_schema=False,
     name="key_create",
-    dependencies=[Depends(require_write_access)],
 )
 async def key_create(
     request: Request,
     session: Annotated[AsyncSession, Depends(db_session)],
+    identity: Annotated[Identity, Depends(require_admin)],
     action: Annotated[str, Form()],
     name: Annotated[str, Form()] = "",
     display_name: Annotated[str, Form()] = "",
@@ -117,24 +126,37 @@ async def key_create(
 
     try:
         if action == GENERATE:
-            await key_service.generate_key(
+            key = await key_service.generate_key(
                 session,
                 settings,
                 name=cleaned_name,
                 display_name=display,
                 algorithm=KeyAlgorithm(algorithm),
+                actor=identity.user_dn,
             )
         else:
-            await key_service.import_key(
+            key = await key_service.import_key(
                 session,
                 settings,
                 name=cleaned_name,
                 armored=armored,
                 passphrase=passphrase or None,
+                actor=identity.user_dn,
             )
     except KeyServiceError as exc:
         form.add("name" if action == GENERATE else "armored", str(exc))
         return _page(request, await _all_keys(session), form, status_code=400)
+
+    await audit.record(
+        session,
+        action=AuditAction.KEY_GENERATE if action == GENERATE else AuditAction.KEY_IMPORT,
+        actor=identity.user_dn,
+        target=key.name,
+        source_ip=client_ip(request.scope),
+        # The fingerprint, never the material: this row is readable by every
+        # admin and is kept for as long as the deployment lives (10.5).
+        details={"fingerprint": key.fingerprint, "algorithm": key.algorithm.value},
+    )
 
     return RedirectResponse(
         request.url_for("key_list").include_query_params(created=cleaned_name),
@@ -172,18 +194,30 @@ async def key_public(
     "/keys/{name}/delete",
     include_in_schema=False,
     name="key_delete",
-    dependencies=[Depends(require_write_access)],
 )
 async def key_delete(
-    request: Request, name: str, session: Annotated[AsyncSession, Depends(db_session)]
+    request: Request,
+    name: str,
+    session: Annotated[AsyncSession, Depends(db_session)],
+    identity: Annotated[Identity, Depends(require_admin)],
 ) -> Response:
     key = await _load_key(session, name)
+    fingerprint = key.fingerprint
     try:
         await key_service.delete_key(session, get_settings(request), key)
     except KeyServiceError as exc:
         form = FormState()
         form.add("name", str(exc))
         return _page(request, await _all_keys(session), form, status_code=409)
+
+    await audit.record(
+        session,
+        action=AuditAction.KEY_DELETE,
+        actor=identity.user_dn,
+        target=name,
+        source_ip=client_ip(request.scope),
+        details={"fingerprint": fingerprint},
+    )
 
     return RedirectResponse(
         request.url_for("key_list").include_query_params(deleted=name),

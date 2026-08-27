@@ -79,8 +79,9 @@ jobs:
         # Bitnami retired its public catalogue in 2025 and `bitnami/openldap:2.6`
         # now 404s; the archived copy under `bitnamilegacy` keeps the same
         # env-var contract. Digest-pinned because the archive is frozen and the
-        # tag will never legitimately move. Revisit at M2, when real LDAP tests
-        # land and a maintained fixture can be validated against them.
+        # tag will never legitimately move. The M3 tests discover the directory
+        # layout rather than assuming it, so swapping this for a maintained
+        # image is a one-line change whenever one is chosen.
         image: bitnamilegacy/openldap@sha256:687f14a22b5c74fb057a57221acdbe7b8c82e2d3619fc380db3af48ec4aa04ed
         ports: ["1389:1389"]
         env:
@@ -119,6 +120,10 @@ jobs:
           REPOMAN_LDAP_BIND_DN: cn=admin,dc=example,dc=test
           REPOMAN_LDAP_BIND_PASSWORD: adminpassword
           REPOMAN_LDAP_USER_BASE_DN: ou=users,dc=example,dc=test
+          # Present so the settings validate; the tests below resolve the real
+          # group DNs from the directory and override these.
+          REPOMAN_LDAP_GROUP_ADMIN: cn=repo-admins,ou=users,dc=example,dc=test
+          REPOMAN_LDAP_GROUP_MAINTAINER: cn=repo-maintainers,ou=users,dc=example,dc=test
         run: uv run pytest -m integration -v
 
   e2e:

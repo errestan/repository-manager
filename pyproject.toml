@@ -129,9 +129,7 @@ known-first-party = ["repository_manager"]
 python_version = "3.11"
 files = ["src", "tests", "scripts"]
 plugins = ["pydantic.mypy"]
-# Overrides below are declared ahead of the modules they target (they land in M1/M2).
-# Flip back to true once those modules exist, to catch genuinely stale sections.
-warn_unused_configs = false
+warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
@@ -139,14 +137,19 @@ no_implicit_optional = true
 strict_equality = true
 
 # Strict mode on the modules where a type error becomes a correctness or security
-# bug: metadata generation must not emit a malformed index, and the permission
-# layer must not silently widen access. See specification.md 14.2.
+# bug: metadata generation must not emit a malformed index, and the authentication
+# and authorization layer must not silently widen access. See specification.md 14.2.
 [[tool.mypy.overrides]]
-module = ["repository_manager.metadata.*", "repository_manager.security.*"]
+module = [
+  "repository_manager.auth.*",
+  "repository_manager.metadata.*",
+  "repository_manager.security.*",
+]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["debian.*", "rpmfile.*", "ldap3.*", "axe_playwright_python.*"]
+# rpmfile joins this list at M4, when createrepo_c integration imports it.
+module = ["debian.*", "ldap3.*", "axe_playwright_python.*"]
 ignore_missing_imports = true
 
 # --------------------------------------------------------------------------- pytest

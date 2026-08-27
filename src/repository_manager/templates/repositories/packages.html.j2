@@ -66,7 +66,7 @@
             <th scope="col">Architecture</th>
             <th scope="col">Published in</th>
             <th scope="col">Size</th>
-            {% if writes_enabled %}<th scope="col">Action</th>{% endif %}
+            {% if identity.can_maintain %}<th scope="col">Action</th>{% endif %}
           </tr>
         </thead>
         <tbody>
@@ -88,10 +88,11 @@
                 {% endif %}
               </td>
               <td>{{ '{:,}'.format(package.size) }} bytes</td>
-              {% if writes_enabled %}
+              {% if identity.can_maintain %}
                 <td>
                   <form method="post"
                         action="{{ url_for('repository_package_delete', slug=repository.slug, publication_id=publication.id) }}">
+                    {% include "partials/csrf.html.j2" %}
                     <button type="submit" class="button-danger">
                       Remove<span class="visually-hidden"> {{ package.name }} {{ package.full_version }} for {{ package.architecture }}</span>
                     </button>
@@ -130,7 +131,7 @@
       {% endif %}
     </p>
   {% endif %}
-  {% if writes_enabled %}
+  {% if identity.can_maintain %}
     <p>
       <a href="{{ url_for('repository_upload_form', slug=repository.slug) }}">Upload a package</a>
     </p>

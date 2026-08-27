@@ -204,8 +204,18 @@ def test_theme_form_returns_to_the_current_page(
 
 
 def test_theme_redirect_refuses_an_external_target(client: TestClient) -> None:
-    """A crafted `next` must not bounce a visitor off-site."""
-    for hostile in ("https://evil.example", "//evil.example", "javascript:alert(1)"):
+    """A crafted `next` must not bounce a visitor off-site.
+
+    `/\\evil.example` is in the list because it is the one that looks like an
+    ordinary path: several browsers normalise the backslash to a slash before
+    resolving it, making it protocol-relative after all.
+    """
+    for hostile in (
+        "https://evil.example",
+        "//evil.example",
+        "/\\evil.example",
+        "javascript:alert(1)",
+    ):
         response = client.post(
             "/preferences/theme",
             data={"theme": "dark", "next": hostile},

@@ -17,6 +17,7 @@ environment variable.
 
 from __future__ import annotations
 
+import datetime as dt
 import ipaddress
 import os
 import tomllib
@@ -147,6 +148,45 @@ class Settings(BaseSettings):
     # -- secrets -----------------------------------------------------------
     secret_key: SecretStr
 
+    # -- directory (7.1) ---------------------------------------------------
+    # Required from M3: there is no local user store, so an instance with no
+    # directory has no way for anyone to log in and no way to make a change.
+    ldap_url: str
+    # Refusing a plaintext bind is the default because the password crosses this
+    # connection.  The escape hatch exists for a laptop running a throwaway
+    # directory in a container, and is refused in production below.
+    ldap_allow_insecure: bool = False
+    ldap_start_tls: bool = False
+    ldap_timeout_seconds: float = Field(default=10.0, gt=0)
+
+    ldap_bind_mode: Literal["search", "direct"] = "search"
+    ldap_bind_dn: str | None = None
+    ldap_bind_password: SecretStr | None = None
+    ldap_user_base_dn: str | None = None
+    ldap_user_filter: str = "(uid={username})"
+    ldap_user_dn_template: str | None = None
+    # Tried in order; the first one the entry actually has becomes the display
+    # name, and the username itself is the final fallback.
+    ldap_display_name_attributes: Annotated[tuple[str, ...], NoDecode] = ("displayName", "cn")
+
+    # `memberof` reads the attribute off the user entry; `search` asks the
+    # directory which groups list the user.  Both are common and neither is
+    # universal, so both are supported (7.1).
+    ldap_group_mode: Literal["memberof", "search"] = "memberof"
+    ldap_group_member_attribute: str = "memberOf"
+    ldap_group_base_dn: str | None = None
+    ldap_group_filter: str = "(member={user_dn})"
+    ldap_nested_groups: bool = False
+    ldap_nested_group_depth: int = Field(default=5, gt=0, le=20)
+
+    ldap_group_admin: str
+    ldap_group_maintainer: str
+
+    # -- sessions (7.2) ----------------------------------------------------
+    session_idle_timeout_minutes: int = Field(default=8 * 60, gt=0)
+    session_absolute_lifetime_minutes: int = Field(default=24 * 60, gt=0)
+    session_revalidate_minutes: int = Field(default=15, gt=0)
+
     # -- limits ------------------------------------------------------------
     max_upload_bytes: int = Field(default=2_147_483_648, gt=0)
     job_concurrency: int = Field(default=2, gt=0)
@@ -156,14 +196,6 @@ class Settings(BaseSettings):
     log_format: Literal["json", "console"] = "json"
     env: Literal["production", "development"] = "production"
     dev_insecure_cookies: bool = False
-
-    # Temporary, and deliberately awkward to switch on.  M2 delivers the write
-    # paths (create, upload, remove, regenerate) but M3 delivers the login that
-    # is supposed to guard them (13.6).  Rather than ship endpoints that any
-    # anonymous caller could drive, they are refused unless an operator opts in,
-    # and the opt-in is rejected outright in production.  M3 removes this
-    # setting along with the checks that read it.
-    allow_unauthenticated_writes: bool = False
 
     @classmethod
     def settings_customise_sources(
@@ -194,6 +226,14 @@ class Settings(BaseSettings):
         """
         if isinstance(value, str):
             return tuple(part for part in value.split(ROOTS_SEPARATOR) if part.strip())
+        return value
+
+    @field_validator("ldap_display_name_attributes", mode="before")
+    @classmethod
+    def _split_attributes(cls, value: Any) -> Any:
+        """Comma-separated, unlike the path lists: these are LDAP attribute names."""
+        if isinstance(value, str):
+            return tuple(part.strip() for part in value.split(",") if part.strip())
         return value
 
     @field_validator("allowed_roots")
@@ -260,13 +300,69 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _refuse_open_writes_in_production(self) -> Settings:
-        """Never allow the M2 interim write gate to be opened in production."""
-        if self.allow_unauthenticated_writes and self.env == "production":
+    def _ldap_transport_is_encrypted(self) -> Settings:
+        """The user's password crosses this connection, so refuse plaintext (7.1)."""
+        scheme = urlsplit(self.ldap_url).scheme.lower()
+        if scheme not in {"ldap", "ldaps"}:
             raise ValueError(
-                "allow_unauthenticated_writes cannot be enabled when REPOMAN_ENV=production: "
-                "it disables the only thing standing in front of package upload and repository "
-                "creation until LDAP authentication lands in M3."
+                f"must start with ldaps:// or ldap://, not {scheme or self.ldap_url!r}"
+            )
+        if scheme == "ldaps" or self.ldap_start_tls:
+            return self
+        if not self.ldap_allow_insecure:
+            raise ValueError(
+                "ldap:// carries the bind password in clear text. Use ldaps://, or set "
+                "REPOMAN_LDAP_START_TLS=true, or -- for a local development directory "
+                "only -- REPOMAN_LDAP_ALLOW_INSECURE=true."
+            )
+        if self.env == "production":
+            raise ValueError(
+                "ldap_allow_insecure cannot be enabled when REPOMAN_ENV=production: it sends "
+                "every user's password over an unencrypted connection."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _ldap_bind_mode_is_complete(self) -> Settings:
+        """Each bind mode needs its own settings; a half-configured one fails at login."""
+        if self.ldap_bind_mode == "search":
+            if not self.ldap_user_base_dn:
+                raise ValueError(
+                    "search bind mode needs REPOMAN_LDAP_USER_BASE_DN, the subtree user "
+                    "entries are searched under"
+                )
+            if "{username}" not in self.ldap_user_filter:
+                raise ValueError("must contain the {username} placeholder")
+        elif not self.ldap_user_dn_template:
+            raise ValueError(
+                "direct bind mode needs REPOMAN_LDAP_USER_DN_TEMPLATE, for example "
+                "'uid={username},ou=people,dc=example,dc=com'"
+            )
+        elif "{username}" not in self.ldap_user_dn_template:
+            raise ValueError("must contain the {username} placeholder")
+        return self
+
+    @model_validator(mode="after")
+    def _ldap_group_resolution_is_complete(self) -> Settings:
+        if self.ldap_group_mode != "search":
+            return self
+        if not self.ldap_group_base_dn:
+            raise ValueError(
+                "group search mode needs REPOMAN_LDAP_GROUP_BASE_DN, the subtree group "
+                "entries are searched under"
+            )
+        if "{user_dn}" not in self.ldap_group_filter:
+            raise ValueError("must contain the {user_dn} placeholder")
+        return self
+
+    @model_validator(mode="after")
+    def _session_lifetimes_are_ordered(self) -> Settings:
+        """An idle timeout longer than the absolute lifetime never fires (7.2)."""
+        if self.session_idle_timeout_minutes > self.session_absolute_lifetime_minutes:
+            raise ValueError(
+                f"session_idle_timeout_minutes ({self.session_idle_timeout_minutes}) is longer "
+                f"than session_absolute_lifetime_minutes "
+                f"({self.session_absolute_lifetime_minutes}), so it could never take effect"
             )
         return self
 
@@ -333,6 +429,22 @@ class Settings(BaseSettings):
         if self.key_email_domain:
             return self.key_email_domain
         return urlsplit(self.public_url).hostname or "localhost"
+
+    @cached_property
+    def ldap_uses_tls(self) -> bool:
+        return urlsplit(self.ldap_url).scheme.lower() == "ldaps" or self.ldap_start_tls
+
+    @cached_property
+    def session_idle_timeout(self) -> dt.timedelta:
+        return dt.timedelta(minutes=self.session_idle_timeout_minutes)
+
+    @cached_property
+    def session_absolute_lifetime(self) -> dt.timedelta:
+        return dt.timedelta(minutes=self.session_absolute_lifetime_minutes)
+
+    @cached_property
+    def session_revalidate_after(self) -> dt.timedelta:
+        return dt.timedelta(minutes=self.session_revalidate_minutes)
 
     @cached_property
     def trusted_proxy_networks(self) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:

@@ -1,6 +1,6 @@
 """Package upload and removal (specification.md 5.1, 5.2).
 
-The upload path is the one place an unauthenticated byte stream reaches the
+The upload path is the one place a caller-supplied byte stream reaches the
 filesystem, so the order of operations is deliberate:
 
 1. stream to a temporary file **inside the repository root**, capped by size;

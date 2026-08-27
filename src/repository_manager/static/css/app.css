@@ -591,3 +591,54 @@ button:hover {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
+
+/* -------------------------------------------------------------- identity */
+
+.account {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.account-name {
+  margin: 0;
+}
+
+/* The role is a label, not a colour: the text is the whole message, and the
+   border rather than a fill keeps the contrast ratio independent of theme (11). */
+.role-badge {
+  display: inline-block;
+  margin-left: 0.25rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.button-quiet {
+  font-size: 0.875rem;
+  padding: 0.2rem 0.6rem;
+}
+
+/* Outcome carries a symbol and a word as well as a colour, so it survives
+   greyscale, colour blindness and a screen reader (11). */
+.outcome {
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.outcome-failure {
+  color: var(--danger);
+}
+
+.outcome-success {
+  color: var(--success);
+}
+
+.outcome-denied {
+  color: var(--text-muted);
+}

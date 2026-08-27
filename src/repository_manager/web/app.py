@@ -10,25 +10,36 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
+from starlette import status
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.responses import Response
+from starlette.responses import RedirectResponse, Response
 from starlette.templating import Jinja2Templates
 
 from repository_manager.__about__ import __version__
+from repository_manager.auth.ldap import LdapAuthenticator
 from repository_manager.config import Settings
 from repository_manager.db import create_engine, create_sessionmaker
 from repository_manager.jobs.queue import JobQueue
 from repository_manager.logging import configure_logging, get_logger
 from repository_manager.services import publishing
+from repository_manager.web.deps import LoginRequired, security_gate
 from repository_manager.web.middleware import (
     ProxyHeadersMiddleware,
     RequestContextMiddleware,
     SecurityHeadersMiddleware,
 )
-from repository_manager.web.routes import health, jobs, keys, preferences, repositories
+from repository_manager.web.routes import (
+    audit,
+    auth,
+    health,
+    jobs,
+    keys,
+    preferences,
+    repositories,
+)
 from repository_manager.web.templating import build_templates, render
 
 log = get_logger(__name__)
@@ -57,7 +68,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         version=__version__,
         root_path=settings.effective_root_path or "/",
         env=settings.env,
-        writes_open=settings.allow_unauthenticated_writes,
+        ldap_url=settings.ldap_url,
+        ldap_encrypted=settings.ldap_uses_tls,
     )
     try:
         yield
@@ -83,9 +95,15 @@ def create_app(settings: Settings, *, configure_logs: bool = True) -> FastAPI:
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        # Application-wide, so identity resolution and the CSRF check cannot be
+        # left off a new route by omission (7.3).
+        dependencies=[Depends(security_gate)],
     )
     app.state.settings = settings
     app.state.templates = templates
+    # Replaceable on the app for tests and for a future alternative directory
+    # backend; nothing outside this line constructs one.
+    app.state.authenticator = LdapAuthenticator(settings)
 
     # Applied bottom-up: proxy resolution must run before anything reads the
     # scheme, the client IP, or the mount prefix.
@@ -96,9 +114,11 @@ def create_app(settings: Settings, *, configure_logs: bool = True) -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     app.include_router(health.router)
+    app.include_router(auth.router)
     app.include_router(preferences.router)
     app.include_router(keys.router)
     app.include_router(jobs.router)
+    app.include_router(audit.router)
     app.include_router(repositories.router)
 
     _register_error_handlers(app, templates)
@@ -117,6 +137,17 @@ def _register_error_handlers(app: FastAPI, templates: Jinja2Templates) -> None:
             {"status_code": exc.status_code, "detail": exc.detail},
             status_code=exc.status_code,
         )
+
+    @app.exception_handler(LoginRequired)
+    async def login_required(request: Request, exc: LoginRequired) -> Response:
+        """Send an anonymous visitor to sign in, remembering where they were.
+
+        A redirect rather than a 401 page: the destination is carried in the
+        query string so the round trip ends where it started, which is the whole
+        reason a page-level check is worth having over a blanket one.
+        """
+        target = request.url_for("login_form").include_query_params(next=exc.next_url)
+        return RedirectResponse(str(target), status_code=status.HTTP_303_SEE_OTHER)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> Response:

@@ -578,18 +578,20 @@ Key settings:
 | `REPOMAN_LOG_FORMAT` | `json` | `json` or `console` |
 | `REPOMAN_ENV` | `production` | Guards debug features |
 
-`REPOMAN_ALLOW_UNAUTHENTICATED_WRITES` (default `false`) is a **temporary** setting, added
-in M2 and removed in M3. M2 delivers the write paths — repository creation, key management,
-upload, removal, regeneration — but M3 delivers the LDAP login that is meant to guard them.
-Rather than ship endpoints an anonymous caller could drive, they are refused unless an
-operator opts in, and configuration rejects the opt-in outright when `REPOMAN_ENV=production`.
-It is a stand-in for the role check that replaces it, not a security model in its own right.
+`REPOMAN_ALLOW_UNAUTHENTICATED_WRITES` was a temporary setting covering the gap between M2
+shipping the write paths and M3 shipping the login meant to guard them. **M3 removed it**,
+along with the checks that read it; the role gate in §3 replaces it.
 
-Only `REPOMAN_ALLOWED_ROOTS`, `REPOMAN_PUBLIC_URL` and `REPOMAN_SECRET_KEY` have no default
-and are enforced from M1. The `REPOMAN_LDAP_*` settings are listed as required above because
-they are required *once authentication exists*; they are optional until M3 wires LDAP up, so
-that the M1 skeleton can run without a directory server. Promoting them to required is part
-of M3, not a later cleanup.
+`REPOMAN_ALLOWED_ROOTS`, `REPOMAN_PUBLIC_URL` and `REPOMAN_SECRET_KEY` have no default and
+are enforced from M1. `REPOMAN_LDAP_URL`, `REPOMAN_LDAP_GROUP_ADMIN` and
+`REPOMAN_LDAP_GROUP_MAINTAINER` were optional until M3, so the M1 skeleton could run without
+a directory server; **M3 promoted them to required**, since an instance with no directory has
+no way for anyone to sign in and therefore no way to change anything.
+
+Sessions (§7.2) add `REPOMAN_SESSION_IDLE_TIMEOUT_MINUTES` (default `480`),
+`REPOMAN_SESSION_ABSOLUTE_LIFETIME_MINUTES` (`1440`) and `REPOMAN_SESSION_REVALIDATE_MINUTES`
+(`15`). The remaining `REPOMAN_LDAP_*` settings — bind mode and its DNs, group resolution
+mode, nesting, display-name attributes, timeouts — are documented in `docs/deployment.md`.
 
 ---
 
@@ -673,7 +675,7 @@ the only reliable way to keep sub-path support from regressing.
 | Phase | Contents |
 |---|---|
 | **M1 — Skeleton** | Config, database, migrations, layout/theme, accessibility baseline, health endpoints, anonymous repository list, **and sub-path/proxy-header handling with its dual CI run (§13.5)** — retrofitting prefix-correct URL generation later is far more expensive than starting with it. |
-| **M2 — APT** | Key management, APT repository creation, upload/remove, pure-Python index generation and signing, job queue, verified against `apt-get`. Write routes are gated behind `REPOMAN_ALLOW_UNAUTHENTICATED_WRITES` until M3 (§12). |
+| **M2 — APT** | Key management, APT repository creation, upload/remove, pure-Python index generation and signing, job queue, verified against `apt-get`. |
 | **M3 — Auth** | LDAP login, sessions, CSRF, role mapping, audit log. |
 | **M4 — RPM** | `createrepo_c` integration, variants, `repomd.xml` signing, verified against `dnf`. |
 | **M5 — API** | Scoped tokens, REST endpoints, OpenAPI, CI usage documentation. |

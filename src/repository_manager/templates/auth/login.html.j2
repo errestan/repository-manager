@@ -1,0 +1,47 @@
+{% extends "base.html.j2" %}
+{% from "partials/forms.html.j2" import error_summary, text_field %}
+{% block title %}
+  {% if form.errors %}Error: {% endif %}Sign in — Repository Manager
+{% endblock %}
+{% block description %}
+  Sign in with your directory account to manage repository contents.
+{% endblock %}
+{% block content %}
+  <h1>Sign in</h1>
+  {{ error_summary(form) }}
+  {% if message %}
+    <p class="callout" role="status">{{ message }}</p>
+  {% endif %}
+  <p class="lede">
+    Browsing repositories and downloading signing keys needs no account. Sign in to upload
+    or remove packages, or to administer repositories and keys.
+  </p>
+  <form method="post" action="{{ url_for('login') }}" class="stacked-form">
+    {% include "partials/csrf.html.j2" %}
+    <input type="hidden" name="next" value="{{ form.value('next') }}">
+    {{ text_field(form, 'username', 'Username', required=True, autocomplete='username',
+      hint='Your directory username, not your email address.') }}
+    {#
+      Not built with text_field: that macro echoes the submitted value back into
+      the input, which is exactly what a password field must never do.
+    #}
+    {% set password_error = form.messages.get('password') %}
+    <div class="field{{ ' field-invalid' if password_error else '' }}">
+      <label for="field-password">
+        Password <span class="required-marker">(required)</span>
+      </label>
+      {% if password_error %}
+        <p class="field-error" id="error-password">
+          <span aria-hidden="true">✗</span> <strong>Error:</strong> {{ password_error }}
+        </p>
+      {% endif %}
+      <input type="password"
+             id="field-password"
+             name="password"
+             required
+             autocomplete="current-password"
+             {% if password_error %}aria-invalid="true" aria-describedby="error-password"{% endif %}>
+    </div>
+    <button type="submit" class="button-primary">Sign in</button>
+  </form>
+{% endblock %}

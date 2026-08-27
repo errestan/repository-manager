@@ -6,10 +6,13 @@ Create repositories, upload and remove packages, and have the indices and GPG si
 regenerated correctly — without hand-running `apt-ftparchive` or `createrepo_c`.
 
 > **Status: pre-alpha.** The specification is complete
-> ([`specification.md`](specification.md)). **M1 (skeleton) is done**: configuration,
-> database and migrations, the accessible layout and theme, health probes, the anonymous
-> repository list, and sub-path/proxy handling. There is no authentication and no way to
-> upload a package yet — those are M2 and M3. Not usable in production.
+> ([`specification.md`](specification.md)). **M1–M3 are done**: configuration, database and
+> migrations, the accessible layout, health probes and sub-path/proxy handling (M1); APT
+> repository creation, signing keys, upload and removal, pure-Python index generation and
+> the job queue, verified against a real `apt-get` (M2); and LDAP login, server-side
+> sessions, CSRF, role mapping and the audit log (M3). Still missing: RPM support (M4), the
+> REST API and scoped tokens (M5), and rate limiting, retention enforcement and metrics
+> (M6). Not usable in production.
 
 ## Features
 
@@ -43,17 +46,32 @@ pip install repository-manager
 
 ### Running it
 
-Three settings have no default and must be supplied:
+Six settings have no default and must be supplied:
 
 ```sh
 export REPOMAN_ALLOWED_ROOTS=/srv/repositories   # colon-separated, like PATH
 export REPOMAN_PUBLIC_URL=https://packages.example.com
 export REPOMAN_SECRET_KEY="$(openssl rand -hex 32)"
 
+# Where accounts come from. There is no local user store, so an instance with no
+# directory has no way for anyone to sign in.
+export REPOMAN_LDAP_URL=ldaps://directory.example.com
+export REPOMAN_LDAP_GROUP_ADMIN='cn=repo-admins,ou=groups,dc=example,dc=com'
+export REPOMAN_LDAP_GROUP_MAINTAINER='cn=repo-maintainers,ou=groups,dc=example,dc=com'
+
 repository-manager check-config   # validate and print the resolved settings
 repository-manager db upgrade     # create or migrate the database
 repository-manager serve          # start the application
 ```
+
+Search-then-bind is the default and also needs `REPOMAN_LDAP_USER_BASE_DN` (plus
+`REPOMAN_LDAP_BIND_DN`/`_PASSWORD` if the directory does not allow anonymous search).
+See [Authentication](docs/deployment.md#authentication) for direct bind, group resolution
+and session lifetimes.
+
+`ldap://` without StartTLS is refused: the bind password would cross the network in clear
+text. `REPOMAN_LDAP_ALLOW_INSECURE=true` overrides that for a local development directory,
+and is itself refused when `REPOMAN_ENV=production`.
 
 Migrations are never applied implicitly on start; `db upgrade` is always an explicit step.
 

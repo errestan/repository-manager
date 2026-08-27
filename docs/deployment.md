@@ -150,3 +150,118 @@ version.
 repository-manager db upgrade
 repository-manager check-config    # prints the resolved settings, never the secret
 ```
+
+## Authentication
+
+There is no local user store. Accounts come from LDAP, and a role comes from group
+membership (specification.md §3, §7.1).
+
+### Transport
+
+The bind carries the user's password, so plaintext is refused. Use `ldaps://`, or `ldap://`
+with `REPOMAN_LDAP_START_TLS=true`. `REPOMAN_LDAP_ALLOW_INSECURE=true` overrides the refusal
+for a development directory, and configuration rejects that override outright when
+`REPOMAN_ENV=production`.
+
+### Finding the user
+
+Two modes, both of which escape everything user-supplied per RFC 4514/4515 before it reaches
+a DN or a filter.
+
+**Search-then-bind** (default) binds as a service account, searches for the user, then
+re-binds as the DN it found — the re-bind is what verifies the password.
+
+```sh
+REPOMAN_LDAP_BIND_MODE=search
+REPOMAN_LDAP_BIND_DN='cn=repoman,ou=services,dc=example,dc=com'
+REPOMAN_LDAP_BIND_PASSWORD_FILE=/run/secrets/ldap-bind-password
+REPOMAN_LDAP_USER_BASE_DN='ou=people,dc=example,dc=com'
+REPOMAN_LDAP_USER_FILTER='(uid={username})'
+```
+
+A filter that matches more than one entry is refused rather than resolved: an ambiguous
+filter is a configuration mistake, and picking one of the matches would sign somebody in as
+an account they may not own.
+
+**Direct bind** skips the search when the DN is derivable from the username.
+
+```sh
+REPOMAN_LDAP_BIND_MODE=direct
+REPOMAN_LDAP_USER_DN_TEMPLATE='uid={username},ou=people,dc=example,dc=com'
+```
+
+### Finding the groups
+
+`REPOMAN_LDAP_GROUP_MODE=memberof` (default) reads `memberOf` off the user entry. Directories
+without that overlay should use the reverse search instead:
+
+```sh
+REPOMAN_LDAP_GROUP_MODE=search
+REPOMAN_LDAP_GROUP_BASE_DN='ou=groups,dc=example,dc=com'
+REPOMAN_LDAP_GROUP_FILTER='(member={user_dn})'
+```
+
+`REPOMAN_LDAP_NESTED_GROUPS=true` walks upwards from the user's direct groups, bounded by
+`REPOMAN_LDAP_NESTED_GROUP_DEPTH` (default 5) and by a seen-set, so a membership cycle in the
+directory cannot hang a login.
+
+Group DNs are compared in normalised form, so `CN=Repo Admins, OU=Groups, DC=example,DC=com`
+and `cn=repo admins,ou=groups,dc=example,dc=com` are the same group.
+
+### Roles
+
+| Group setting | Role | May |
+|---|---|---|
+| `REPOMAN_LDAP_GROUP_ADMIN` | `admin` | everything, including repository settings, distributions and signing keys |
+| `REPOMAN_LDAP_GROUP_MAINTAINER` | `maintainer` | upload and remove packages, trigger regeneration, see their own audit entries |
+| *(neither)* | — | read only, exactly like an anonymous visitor |
+
+Someone in both groups gets `admin`. Someone who authenticates but matches neither is told
+so plainly rather than being given a silent read-only session — they would otherwise
+conclude their password was wrong.
+
+Reading is never restricted: repository listings, package lists, metadata and public keys are
+visible to everyone, signed in or not, and no listing is filtered by identity.
+
+### Sessions
+
+Sessions are rows in the database, referenced by an opaque 256-bit cookie. Only a SHA-256 of
+the cookie is stored, so a database dump contains nothing replayable.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `REPOMAN_SESSION_IDLE_TIMEOUT_MINUTES` | `480` | signed out after this long with no requests |
+| `REPOMAN_SESSION_ABSOLUTE_LIFETIME_MINUTES` | `1440` | ceiling regardless of activity |
+| `REPOMAN_SESSION_REVALIDATE_MINUTES` | `15` | how often group membership is re-checked |
+
+Revalidation is what makes a revoked account stop working without waiting for expiry: losing
+every mapped group ends **all** of that user's sessions on the next request, and a change of
+group takes effect on the open session rather than only the next login. A directory that is
+merely unreachable does *not* sign anyone out — an outage would otherwise lock the team out
+of a system whose data is on local disk — and the check is retried on the following request.
+
+Cookies are `HttpOnly`, `SameSite=Lax`, `Secure` whenever the public URL is `https`, and
+scoped to the mount path so two applications on one hostname cannot read each other's
+sessions.
+
+### Cross-site request forgery
+
+Every state-changing request is checked twice: an `Origin`/`Referer` comparison against
+`REPOMAN_PUBLIC_URL`, and a per-session token sent as a hidden `_csrf` field or an
+`X-CSRF-Token` header. Both are enforced application-wide rather than per route.
+
+This is why `REPOMAN_PUBLIC_URL` must be the externally visible origin. If it does not match
+what the browser used, every form submission is refused.
+
+## The audit log
+
+Every change is recorded with who, what, which repository, from where, and whether it
+worked — including failed and refused sign-ins. Entries are append-only: there is no update
+or delete path in the application, not a permission check that could be worked around.
+
+`/audit` shows an admin every account's entries and a maintainer only their own, scoped in
+the query rather than in the template.
+
+The client address comes from the same resolution as everything else, so
+`REPOMAN_TRUSTED_PROXIES` must list the proxy for the audit log to record real client
+addresses rather than the proxy's own.

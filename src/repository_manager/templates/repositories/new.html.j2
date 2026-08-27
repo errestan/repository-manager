@@ -32,6 +32,7 @@
     <form method="post"
           action="{{ url_for('repository_create') }}"
           class="stacked-form">
+      {% include "partials/csrf.html.j2" %}
       <h2>Identity</h2>
       {{ text_field(form, 'name', 'Name', required=True,
         hint='Shown throughout the interface. The URL identifier is derived from it.') }}

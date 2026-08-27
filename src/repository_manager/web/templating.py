@@ -15,6 +15,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.templating import Jinja2Templates
 
+from repository_manager.web.deps import identity_of
+
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 Theme = Literal["light", "dark", "system"]
@@ -80,12 +82,18 @@ def render(
     status_code: int = 200,
 ) -> Response:
     """Render a template with the values every page needs already present."""
+    # Identity and the CSRF token are added here rather than passed by each
+    # route: a template that renders a form needs both, and a route that forgot
+    # one would produce a page whose forms are silently rejected (7.3).
+    identity = identity_of(request)
     payload: dict[str, Any] = {
         "request": request,
         "theme": read_theme(request),
         "themes": THEMES,
         "csp_nonce": csp_nonce(request),
         "current_path": current_path(request),
+        "identity": identity,
+        "csrf_token": identity.csrf_token,
         **(context or {}),
     }
     return templates.TemplateResponse(

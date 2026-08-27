@@ -163,18 +163,21 @@
       </table>
     {% endcall %}
   {% endif %}
-  {% if writes_enabled %}
+  {% if identity.can_maintain %}
     <h2>Manage</h2>
     <ul class="action-list">
       <li>
         <a href="{{ url_for('repository_upload_form', slug=repository.slug) }}">Upload a package</a>
       </li>
-      <li>
-        <a href="{{ url_for('repository_distributions', slug=repository.slug) }}">Manage distributions</a>
-      </li>
+      {% if identity.can_admin %}
+        <li>
+          <a href="{{ url_for('repository_distributions', slug=repository.slug) }}">Manage distributions</a>
+        </li>
+      {% endif %}
       <li>
         <form method="post"
               action="{{ url_for('repository_regenerate', slug=repository.slug) }}">
+          {% include "partials/csrf.html.j2" %}
           <button type="submit">Regenerate metadata</button>
         </form>
       </li>

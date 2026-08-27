@@ -121,13 +121,20 @@ def cmd_check_config(_args: argparse.Namespace) -> int:
     trusted = ", ".join(settings.trusted_proxies) or "(none — forwarded headers ignored)"
     print(f"  trusted proxies  : {trusted}")
     print(f"  log format       : {settings.log_format}")
-    if settings.allow_unauthenticated_writes:
-        # Loud, because it is: anyone who can reach this instance can upload.
+    print(f"  directory        : {settings.ldap_url} ({settings.ldap_bind_mode} bind)")
+    print(f"  admin group      : {settings.ldap_group_admin}")
+    print(f"  maintainer group : {settings.ldap_group_maintainer}")
+    print(
+        f"  session lifetime : {settings.session_idle_timeout_minutes} min idle, "
+        f"{settings.session_absolute_lifetime_minutes} min absolute"
+    )
+    if not settings.ldap_uses_tls:
+        # Loud, because it is: every password typed into the login form crosses
+        # this connection in clear text (7.1).
         print(
-            "\n  WARNING: REPOMAN_ALLOW_UNAUTHENTICATED_WRITES is set. Repository\n"
-            "  creation, key management and package upload are open to anyone who\n"
-            "  can reach this instance. Intended only for development until LDAP\n"
-            "  authentication lands.",
+            "\n  WARNING: REPOMAN_LDAP_URL is ldap:// with StartTLS off, so bind\n"
+            "  passwords cross the network unencrypted. Intended for local\n"
+            "  development only; configuration refuses it in production.",
             file=sys.stderr,
         )
     return 0

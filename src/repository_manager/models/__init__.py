@@ -6,6 +6,14 @@ Alembic's autogenerate and the drift test both depend on it importing the
 complete set, so new model modules belong here as soon as they exist.
 """
 
+from repository_manager.models.auth import (
+    ActorType,
+    AuditAction,
+    AuditLog,
+    AuditOutcome,
+    Role,
+    UserSession,
+)
 from repository_manager.models.base import Base, RepositoryType, UtcDateTime, utcnow
 from repository_manager.models.job import Job, JobState, JobType
 from repository_manager.models.key import (
@@ -34,9 +42,13 @@ __all__ = [
     "KEY_NAME_PATTERN",
     "NAME_PATTERN",
     "SLUG_PATTERN",
+    "ActorType",
     "AptArchitecture",
     "AptComponent",
     "AptDistribution",
+    "AuditAction",
+    "AuditLog",
+    "AuditOutcome",
     "Base",
     "Job",
     "JobState",
@@ -46,9 +58,11 @@ __all__ = [
     "PackagePublication",
     "Repository",
     "RepositoryType",
+    "Role",
     "RpmVariant",
     "SigningKey",
     "UploadSource",
+    "UserSession",
     "UtcDateTime",
     "utcnow",
 ]

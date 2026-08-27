@@ -29,6 +29,7 @@
           action="{{ url_for('repository_upload', slug=repository.slug) }}"
           enctype="multipart/form-data"
           class="stacked-form">
+      {% include "partials/csrf.html.j2" %}
       {{ select_field(form, 'target', 'Publish into', targets, required=True,
         empty_label='Choose a distribution and component…') }}
       {% set message = form.messages.get('package') %}

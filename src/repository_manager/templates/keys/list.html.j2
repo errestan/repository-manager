@@ -63,11 +63,12 @@
   {% else %}
     <p>No signing keys yet. Create one below before adding a repository.</p>
   {% endif %}
-  {% if writes_enabled %}
+  {% if identity.can_admin %}
     <h2 id="generate">Generate a new key</h2>
     <form method="post"
           action="{{ url_for('key_create') }}"
           class="stacked-form">
+      {% include "partials/csrf.html.j2" %}
       <input type="hidden" name="action" value="generate">
       {{ text_field(form, 'name', 'Key name', required=True,
         hint='Lowercase letters, digits and hyphens. Used in the filename clients trust, e.g. internal.asc.') }}
@@ -82,6 +83,7 @@
     <form method="post"
           action="{{ url_for('key_create') }}"
           class="stacked-form">
+      {% include "partials/csrf.html.j2" %}
       <input type="hidden" name="action" value="import">
       {{ text_field(form, 'name', 'Key name', required=True,
         hint='How this instance will refer to the key.') }}
@@ -94,8 +96,10 @@
   {% else %}
     <h2>Adding keys</h2>
     <p class="callout">
-      Key management is disabled on this instance. It is guarded by administrator login,
-      which arrives in a later release.
+      Generating, importing and deleting signing keys is restricted to administrators.
+      {% if not identity.authenticated %}
+        <a href="{{ url_for('login_form') }}">Sign in</a> if you have an administrator account.
+      {% endif %}
     </p>
   {% endif %}
 {% endblock %}

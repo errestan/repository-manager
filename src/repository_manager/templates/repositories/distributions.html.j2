@@ -57,6 +57,7 @@
   <form method="post"
         action="{{ url_for('repository_distribution_add', slug=repository.slug) }}"
         class="stacked-form">
+    {% include "partials/csrf.html.j2" %}
     {{ text_field(form, 'codename', 'Codename', required=True,
       hint='What clients put in sources.list, e.g. trixie.') }}
     {{ text_field(form, 'suite', 'Suite', hint='Optional. Defaults to the codename.') }}

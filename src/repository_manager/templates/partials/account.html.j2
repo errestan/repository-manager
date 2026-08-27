@@ -1,0 +1,23 @@
+{#
+  Who is signed in, and the control to stop being (specification.md 7.2, 8.1).
+
+  Sign-out is a form POST rather than a link: a GET that ends a session can be
+  triggered by any page that can make the browser fetch a URL, and would also be
+  liable to be followed by a link prefetcher.
+#}
+{% if identity.authenticated %}
+  <div class="account">
+    <p class="account-name">
+      Signed in as <strong>{{ identity.display_name }}</strong>
+      <span class="role-badge">{{ identity.role.label }}</span>
+    </p>
+    <form method="post" action="{{ url_for('logout') }}">
+      {% include "partials/csrf.html.j2" %}
+      <button type="submit" class="button-quiet">Sign out</button>
+    </form>
+  </div>
+{% else %}
+  <p class="account">
+    <a href="{{ url_for('login_form') }}?next={{ current_path | urlencode }}">Sign in</a>
+  </p>
+{% endif %}

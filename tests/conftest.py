@@ -7,6 +7,7 @@ migrations and the models have not drifted apart.
 
 from __future__ import annotations
 
+import re
 import shutil
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
@@ -34,8 +35,26 @@ from repository_manager.models import (
 )
 from repository_manager.security.gpg import GnuPG
 from repository_manager.web.app import create_app
+from tests.support import directory as fake_directory
+from tests.support.directory import FakeDirectory
 
 SECRET = "t" * 32
+
+# The origin every fixture client presents, and the base URL they address.
+#
+# Both matter.  A browser sends `Origin` on every state-changing request and the
+# security gate insists on it whenever a session cookie is attached (7.3), so a
+# client that omits it is not simulating a browser -- it is simulating an
+# attacker.  And because the public URL is https, session cookies are marked
+# Secure, which means a client addressing http://testserver would hold the
+# cookie and never send it: the tests would silently run signed out.
+PUBLIC_URL = "https://packages.example.test"
+
+
+def browser(app: FastAPI) -> TestClient:
+    """A client that behaves like a browser talking to this deployment."""
+    return TestClient(app, base_url=PUBLIC_URL, headers={"origin": PUBLIC_URL})
+
 
 # The name every fixture key is registered under.
 TEST_KEY_NAME = "test-key"
@@ -68,36 +87,24 @@ def make_settings(database_url: str, keyring: Keyring, repository_root: Path) ->
     def factory(**overrides: object) -> Settings:
         defaults: dict[str, object] = {
             "allowed_roots": str(repository_root),
-            "public_url": "https://packages.example.test",
+            "public_url": PUBLIC_URL,
             "secret_key": SECRET,
             "database_url": database_url,
             "env": "development",
             "log_format": "console",
             "gnupghome": str(keyring.home),
+            # No directory is contacted in the unit suite -- `make_app` swaps in
+            # a fake authenticator -- but the settings still have to be valid,
+            # because refusing to start on a half-configured directory is
+            # itself a behaviour worth not breaking (7.1).
+            "ldap_url": "ldaps://directory.example.test",
+            "ldap_user_base_dn": fake_directory.BASE_DN,
+            "ldap_group_admin": "cn=repo-admins,ou=groups,dc=example,dc=test",
+            "ldap_group_maintainer": "cn=repo-maintainers,ou=groups,dc=example,dc=test",
         }
         return load_settings(**{**defaults, **overrides})
 
     return factory
-
-
-@pytest.fixture
-def writable_app(make_app: AppFactory, scratch_keyring: Keyring) -> FastAPI:
-    """An application with the M2 interim write gate opened (12).
-
-    Pointed at a *scratch* keyring: anything driving the write routes can
-    generate or delete keys, and doing that in the session-wide keyring would
-    leak into whichever test ran next.
-    """
-    built: FastAPI = make_app(
-        allow_unauthenticated_writes=True, gnupghome=str(scratch_keyring.home)
-    )
-    return built
-
-
-@pytest.fixture
-def writable_client(writable_app: FastAPI) -> Iterator[TestClient]:
-    with TestClient(writable_app) as test_client:
-        yield test_client
 
 
 @pytest.fixture
@@ -107,9 +114,19 @@ def settings(make_settings: SettingsFactory) -> Settings:
 
 
 @pytest.fixture
-def make_app(make_settings: SettingsFactory) -> AppFactory:
+def directory() -> FakeDirectory:
+    """The accounts the web tests sign in as (see tests/support/directory.py)."""
+    return fake_directory.populated()
+
+
+@pytest.fixture
+def make_app(make_settings: SettingsFactory, directory: FakeDirectory) -> AppFactory:
     def factory(**overrides: object) -> FastAPI:
-        return create_app(make_settings(**overrides), configure_logs=False)
+        built = create_app(make_settings(**overrides), configure_logs=False)
+        # Swapped in rather than mocked at import time, so every layer above the
+        # directory -- sessions, CSRF, roles, audit -- runs its real code.
+        built.state.authenticator = directory
+        return built
 
     return factory
 
@@ -122,8 +139,59 @@ def app(make_app: AppFactory) -> FastAPI:
 
 @pytest.fixture
 def client(app: FastAPI) -> Iterator[TestClient]:
-    with TestClient(app) as test_client:
+    with browser(app) as test_client:
         yield test_client
+
+
+# --------------------------------------------------------------------- signed in
+
+
+@pytest.fixture
+def manageable_app(make_app: AppFactory, scratch_keyring: Keyring) -> FastAPI:
+    """An application whose keyring a test may safely modify.
+
+    Anything driving the key routes can generate or delete keys, and doing that
+    in the session-wide keyring would leak into whichever test ran next.
+    """
+    built: FastAPI = make_app(gnupghome=str(scratch_keyring.home))
+    return built
+
+
+def sign_in(test_client: TestClient, username: str, password: str) -> TestClient:
+    """Log a client in through the real form, and carry its CSRF token.
+
+    Going through ``POST /login`` rather than inserting a session row is what
+    makes these fixtures worth having: every test that uses one has also proved
+    that the login flow still works.
+    """
+    response = test_client.post(
+        "/login", data={"username": username, "password": password}, follow_redirects=False
+    )
+    assert response.status_code == 303, response.text
+    test_client.headers["x-csrf-token"] = csrf_token_of(test_client)
+    return test_client
+
+
+def csrf_token_of(test_client: TestClient) -> str:
+    """Read the token this session's pages are rendering into their forms."""
+    body = test_client.get("/").text
+    match = re.search(r'name="_csrf" value="([^"]+)"', body)
+    assert match is not None, "no CSRF field rendered"
+    return match.group(1)
+
+
+@pytest.fixture
+def admin_client(manageable_app: FastAPI) -> Iterator[TestClient]:
+    with browser(manageable_app) as test_client:
+        yield sign_in(test_client, fake_directory.ADMIN_USERNAME, fake_directory.ADMIN_PASSWORD)
+
+
+@pytest.fixture
+def maintainer_client(manageable_app: FastAPI) -> Iterator[TestClient]:
+    with browser(manageable_app) as test_client:
+        yield sign_in(
+            test_client, fake_directory.MAINTAINER_USERNAME, fake_directory.MAINTAINER_PASSWORD
+        )
 
 
 @pytest.fixture

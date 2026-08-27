@@ -9,7 +9,14 @@ import pytest
 
 from repository_manager.cli import main
 
-REQUIRED = ("REPOMAN_ALLOWED_ROOTS", "REPOMAN_PUBLIC_URL", "REPOMAN_SECRET_KEY")
+REQUIRED = (
+    "REPOMAN_ALLOWED_ROOTS",
+    "REPOMAN_PUBLIC_URL",
+    "REPOMAN_SECRET_KEY",
+    "REPOMAN_LDAP_URL",
+    "REPOMAN_LDAP_GROUP_ADMIN",
+    "REPOMAN_LDAP_GROUP_MAINTAINER",
+)
 
 
 @pytest.fixture
@@ -19,6 +26,12 @@ def configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
     monkeypatch.setenv("REPOMAN_PUBLIC_URL", "https://packages.example.test")
     monkeypatch.setenv("REPOMAN_SECRET_KEY", "c" * 32)
     monkeypatch.setenv("REPOMAN_DATABASE_URL", url)
+    monkeypatch.setenv("REPOMAN_LDAP_URL", "ldaps://directory.example.test")
+    monkeypatch.setenv("REPOMAN_LDAP_USER_BASE_DN", "ou=people,dc=example,dc=test")
+    monkeypatch.setenv("REPOMAN_LDAP_GROUP_ADMIN", "cn=repo-admins,ou=groups,dc=example,dc=test")
+    monkeypatch.setenv(
+        "REPOMAN_LDAP_GROUP_MAINTAINER", "cn=repo-maintainers,ou=groups,dc=example,dc=test"
+    )
     monkeypatch.delenv("REPOMAN_CONFIG_FILE", raising=False)
     monkeypatch.delenv("REPOMAN_ROOT_PATH", raising=False)
     return url

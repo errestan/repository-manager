@@ -1,0 +1,105 @@
+{% extends "base.html.j2" %}
+{% from "partials/tables.html.j2" import scrollable %}
+{% block title %}Audit log — Repository Manager{% endblock %}
+{% block description %}
+  A record of every change made through this instance.
+{% endblock %}
+{% block content %}
+  <h1>Audit log</h1>
+  {% if scope_is_own %}
+    <p class="lede">Showing your own actions. Administrators see every account's entries.</p>
+  {% else %}
+    <p class="lede">Showing every account's actions.</p>
+  {% endif %}
+  <form method="get" action="{{ url_for('audit_log') }}" class="filter-form">
+    <div class="field">
+      <label for="field-action">Action</label>
+      <select id="field-action" name="action">
+        <option value="">All actions</option>
+        {% for value, label in actions %}
+          <option value="{{ value }}" {% if action == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit">Filter</button>
+  </form>
+  {% if entries %}
+    <p aria-live="polite">
+      {{ '{:,}'.format(total) }} entr{{ 'y' if total == 1 else 'ies' }}, page {{ page }} of {{ pages }}.
+    </p>
+    {% call scrollable('Audit log entries') %}
+      <table class="data-table">
+        <caption>Actions recorded by this instance, most recent first.</caption>
+        <thead>
+          <tr>
+            <th scope="col">When</th>
+            <th scope="col">Action</th>
+            <th scope="col">Actor</th>
+            <th scope="col">Target</th>
+            <th scope="col">Outcome</th>
+            <th scope="col">Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for entry in entries %}
+            <tr>
+              <th scope="row">
+                <time datetime="{{ entry.occurred_at.isoformat() }}">{{ entry.occurred_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>
+              </th>
+              <td>{{ entry.action.label }}</td>
+              <td>
+                <code>{{ entry.actor }}</code>
+              </td>
+              <td>
+                {% if entry.repository %}
+                  <a href="{{ url_for('repository_detail', slug=entry.repository.slug) }}">{{ entry.repository.name }}</a>
+                {% endif %}
+                {% if entry.target %}<code>{{ entry.target }}</code>{% endif %}
+                {% if not entry.repository and not entry.target %}—{% endif %}
+              </td>
+              <td>
+                {#
+                  Never colour alone: the symbol and the word both carry the
+                  outcome, so it survives greyscale and a screen reader (11).
+                #}
+                <span class="outcome outcome-{{ entry.outcome.value }}">
+                  <span aria-hidden="true">
+                    {%- if entry.outcome.value == 'success' -%}✓{%- elif entry.outcome.value == 'denied' -%}⊘{%- else -%}✗{%- endif -%}
+                  </span>
+                  {{ entry.outcome.label }}
+                </span>
+              </td>
+              <td>{{ entry.source_ip or '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    {% if pages > 1 %}
+      <nav class="pagination" aria-label="Pagination">
+        <ul>
+          {% if page > 1 %}
+            <li>
+              <a href="{{ url_for('audit_log').include_query_params(action=action, page=page - 1) }}"
+                 rel="prev">Previous page</a>
+            </li>
+          {% endif %}
+          {% if page < pages %}
+            <li>
+              <a href="{{ url_for('audit_log').include_query_params(action=action, page=page + 1) }}"
+                 rel="next">Next page</a>
+            </li>
+          {% endif %}
+        </ul>
+      </nav>
+    {% endif %}
+  {% else %}
+    <p>
+      {% if action %}
+        No entries match that filter.
+      {% else %}
+        Nothing has been recorded yet.
+      {% endif %}
+    </p>
+  {% endif %}
+{% endblock %}

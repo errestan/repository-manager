@@ -7,6 +7,12 @@
 <form class="theme-switch"
       method="post"
       action="{{ url_for('set_theme') }}">
+  {#
+    Anonymous visitors have no session and so no token to send; the gate only
+    demands one when a session cookie is present.  Including it unconditionally
+    is what keeps the control working once somebody signs in (7.3).
+  #}
+  {% include "partials/csrf.html.j2" %}
   <input type="hidden" name="next" value="{{ current_path }}">
   <fieldset>
     <legend>Colour theme</legend>

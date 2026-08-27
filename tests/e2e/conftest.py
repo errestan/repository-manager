@@ -8,6 +8,8 @@ what keeps sub-path support from quietly rotting (specification.md 13.5, AD-14).
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
+import hashlib
 import os
 import socket
 import subprocess
@@ -19,14 +21,20 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 import pytest
+from playwright.sync_api import Page
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from repository_manager import migrate
+from repository_manager.auth.sessions import SESSION_COOKIE
 from repository_manager.models import (
+    ActorType,
     AptArchitecture,
     AptComponent,
     AptDistribution,
+    AuditAction,
+    AuditLog,
+    AuditOutcome,
     Job,
     JobState,
     JobType,
@@ -35,11 +43,23 @@ from repository_manager.models import (
     PackagePublication,
     Repository,
     RepositoryType,
+    Role,
     RpmVariant,
     SigningKey,
+    UserSession,
 )
+from repository_manager.models.base import utcnow
 
 STARTUP_TIMEOUT_SECONDS = 45
+
+# Fixed values, so the cookie fixtures need no plumbing back from the seeder.
+# Only the hash reaches the database, exactly as in production (7.2).
+ADMIN_SESSION_TOKEN = "e2e-admin-session-token"
+#: A second session, for the one test that ends the session it is using.  The
+#: whole suite shares one server and one database, so signing out of the shared
+#: session would silently leave every later test anonymous.
+LOGOUT_SESSION_TOKEN = "e2e-logout-session-token"
+ADMIN_DN = "uid=ada,ou=people,dc=example,dc=test"
 
 
 def _free_port() -> int:
@@ -79,10 +99,20 @@ def live_server(tmp_path_factory: pytest.TempPathFactory, root_path: str) -> Ite
         # otherwise, which is itself covered by the unit tests.
         "REPOMAN_ENV": "development",
         "REPOMAN_LOG_FORMAT": "console",
-        # The management forms are a large part of what these tests audit --
-        # error summaries, fieldsets, labelled file inputs -- and they are only
-        # reachable with the interim write gate open (12).
-        "REPOMAN_ALLOW_UNAUTHENTICATED_WRITES": "true",
+        # No directory is reachable from this job, and none is needed: the
+        # admin session below is seeded directly into the database, which is
+        # where sessions live (7.2).  The address still has to be configured,
+        # and pointing it at a closed port is what lets the login-failure page
+        # be audited as well -- an unreachable directory and a wrong password
+        # produce the same page by design (7.1).
+        "REPOMAN_LDAP_URL": "ldap://127.0.0.1:1",
+        "REPOMAN_LDAP_ALLOW_INSECURE": "true",
+        "REPOMAN_LDAP_USER_BASE_DN": "ou=people,dc=example,dc=test",
+        "REPOMAN_LDAP_GROUP_ADMIN": "cn=repo-admins,ou=groups,dc=example,dc=test",
+        "REPOMAN_LDAP_GROUP_MAINTAINER": "cn=repo-maintainers,ou=groups,dc=example,dc=test",
+        # Keeps the failed-login audit quick rather than waiting out a default
+        # connect timeout on a closed port.
+        "REPOMAN_LDAP_TIMEOUT_SECONDS": "2",
     }
 
     # The log goes to a file, never to a pipe.  An unread PIPE only holds about
@@ -174,8 +204,56 @@ def _seed(url: str) -> None:
         session.flush()
         _seed_packages(session, apt)
         _seed_jobs(session, apt)
+        _seed_session(session)
+        _seed_audit(session)
         session.commit()
     engine.dispose()
+
+
+def _seed_session(session: Session) -> None:
+    """An admin session, so the management pages can be audited (7.2).
+
+    Written straight into the table rather than obtained by logging in: no
+    directory is reachable from this job, and a session *is* a row -- inserting
+    one exercises the same lookup a real login would produce.  The revalidation
+    deadline is far out so no request tries to reach the directory.
+    """
+    now = utcnow()
+    for token in (ADMIN_SESSION_TOKEN, LOGOUT_SESSION_TOKEN):
+        session.add(
+            UserSession(
+                token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                user_dn=ADMIN_DN,
+                username="ada",
+                display_name="Ada Admin",
+                role=Role.ADMIN,
+                csrf_secret=f"e2e-csrf-{token}",
+                created_at=now,
+                last_seen_at=now,
+                expires_at=now + dt.timedelta(days=1),
+                revalidate_after=now + dt.timedelta(days=1),
+            )
+        )
+
+
+def _seed_audit(session: Session) -> None:
+    """One entry of each outcome, so the audit table has all three renderings."""
+    for action, outcome, target in (
+        (AuditAction.LOGIN, AuditOutcome.SUCCESS, None),
+        (AuditAction.PACKAGE_UPLOAD, AuditOutcome.SUCCESS, "alpha_1.2-1_amd64.deb"),
+        (AuditAction.KEY_DELETE, AuditOutcome.FAILURE, "internal"),
+        (AuditAction.REPOSITORY_CREATE, AuditOutcome.DENIED, "restricted"),
+    ):
+        session.add(
+            AuditLog(
+                actor=ADMIN_DN,
+                actor_type=ActorType.USER,
+                action=action,
+                outcome=outcome,
+                target=target,
+                source_ip="203.0.113.7",
+            )
+        )
 
 
 def _seed_packages(session: Session, repository: Repository) -> None:
@@ -228,17 +306,50 @@ def _seed_jobs(session: Session, repository: Repository) -> None:
 
 @pytest.fixture
 def pages(live_server: str) -> list[str]:
-    """Every page the suite audits, at whichever prefix is under test."""
+    """The pages any visitor can reach, at whichever prefix is under test."""
     return [
         f"{live_server}/",
+        f"{live_server}/login",
         f"{live_server}/repositories/internal",
         f"{live_server}/repositories/el9",
         f"{live_server}/repositories/internal/packages",
+        f"{live_server}/keys",
+    ]
+
+
+@pytest.fixture
+def management_pages(live_server: str) -> list[str]:
+    """The pages that need a role, audited through a signed-in browser (3)."""
+    return [
         f"{live_server}/repositories/internal/packages/upload",
         f"{live_server}/repositories/internal/distributions",
         f"{live_server}/repositories/new",
-        f"{live_server}/keys",
         f"{live_server}/jobs",
         f"{live_server}/jobs/1",
         f"{live_server}/jobs/2",
+        f"{live_server}/audit",
     ]
+
+
+@pytest.fixture
+def signed_in(page: Page, live_server: str, root_path: str) -> Page:
+    """A browser carrying the seeded admin session.
+
+    The cookie is set on the context rather than typed into the login form,
+    because no directory is reachable here.  Everything downstream of the cookie
+    -- session lookup, role gate, CSRF token in every form -- is the real thing.
+    """
+    page.context.add_cookies(
+        [
+            {
+                "name": SESSION_COOKIE,
+                "value": ADMIN_SESSION_TOKEN,
+                "domain": "127.0.0.1",
+                "path": root_path or "/",
+                "httpOnly": True,
+                "secure": False,
+                "sameSite": "Lax",
+            }
+        ]
+    )
+    return page
