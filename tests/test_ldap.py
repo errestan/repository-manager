@@ -8,6 +8,8 @@ mapping.  A test that passes here is a test of this module, not of a stub.
 
 from __future__ import annotations
 
+import struct
+
 import pytest
 from ldap3 import MOCK_SYNC, Connection, Server
 from ldap3.core.exceptions import LDAPException
@@ -405,3 +407,27 @@ def test_different_dns_do_not_normalise_the_same() -> None:
 def test_an_unparseable_dn_does_not_raise() -> None:
     """A malformed mapping should fail to match, not fail the login."""
     assert normalise_dn("not a dn at all") == "not a dn at all"
+
+
+# ------------------------------------------------------------------- transport
+
+
+@pytest.mark.parametrize("configured", [0.5, 1.0, 10.0, 2.5])
+def test_the_receive_timeout_survives_the_socket_layer(
+    ldap_settings: SettingsFactory, configured: float
+) -> None:
+    """A float here is fatal, and nothing else in this suite would notice.
+
+    On POSIX ``ldap3`` turns ``receive_timeout`` into a ``struct timeval`` with
+    ``pack('LL', value, 0)``, which rejects a float.  It raises ``struct.error``
+    -- not an ``LDAPException`` -- so it escapes straight out of ``open()`` past
+    every handler in the module.  The mock directory the rest of these tests use
+    never opens a socket, so this has to be asserted against the real
+    ``Connection`` object instead.
+    """
+    connection = LdapAuthenticator(ldap_settings(ldap_timeout_seconds=configured)).build_connection(
+        "cn=someone,dc=example,dc=test", "password"
+    )
+
+    assert connection.receive_timeout >= 1
+    struct.pack("LL", connection.receive_timeout, 0)

@@ -19,6 +19,7 @@ Three rules run through the whole module:
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -160,7 +161,13 @@ class LdapAuthenticator:
             password=password,
             auto_bind=False,
             raise_exceptions=False,
-            receive_timeout=self.settings.ldap_timeout_seconds,
+            # Whole seconds, and never zero: on POSIX ldap3 packs this value
+            # into a `struct timeval` with `pack('LL', ...)`, which rejects a
+            # float outright -- and it raises `struct.error`, not an
+            # `LDAPException`, so it escapes the handling in `_connect` below.
+            # The float the operator configured still applies to `connect_timeout`
+            # above, where it is passed to `settimeout` and honoured exactly.
+            receive_timeout=max(1, math.ceil(self.settings.ldap_timeout_seconds)),
         )
 
     def _connect(self, user: str | None, password: str | None) -> Connection:
