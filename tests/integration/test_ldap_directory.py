@@ -8,9 +8,13 @@ bind, a filter or a group search actually behaves shows up here.
 The directory's layout is discovered rather than assumed.  Where a container
 image puts its users -- ``cn=`` or ``uid=``, under which ``ou`` -- is that
 image's business and changes between versions; hard-coding it would produce
-failures that say nothing about this code.  The fixtures below find the
-accounts and the group first, and skip with a clear message if the directory
-does not look the way the CI job promises.
+failures that say nothing about this code.  The fixtures below find the two
+accounts and then build their own groups around them.
+
+Once a directory is configured, a layout that does not match is a *failure*,
+never a skip.  The first run of these tests skipped all fifteen because a group
+could not be found, and the job still reported success -- which is worse than
+having no tests at all, because it looks like coverage.
 """
 
 from __future__ import annotations
@@ -47,10 +51,17 @@ pytestmark = [
     ),
 ]
 
-MAINTAINER_GROUP = f"cn=repo-maintainers,{USER_BASE}"
-
 #: Matches whichever naming attribute the directory used for its user entries.
 USER_FILTER = "(|(uid={username})(cn={username}))"
+
+
+#: Groups this suite creates and owns.  The image's own ``LDAP_GROUP`` is not
+#: used: a subtree search for it found nothing, so what the image guarantees is
+#: the two user entries and nothing more.  Creating both groups here also lets
+#: the memberships express what the role tests need -- alice in both, bob in one
+#: -- which a single seeded group could not.
+ADMIN_GROUP = f"cn=repoman-admins,{USER_BASE}"
+MAINTAINER_GROUP = f"cn=repoman-maintainers,{USER_BASE}"
 
 
 @dataclass(frozen=True)
@@ -59,7 +70,6 @@ class Fixture:
 
     alice: str
     bob: str
-    admin_group: str
 
 
 @pytest.fixture(scope="module")
@@ -77,31 +87,40 @@ def _one_dn(connection: Connection, base: str, search_filter: str) -> str:
         entry for entry in connection.response or [] if entry.get("type") == "searchResEntry"
     ]
     if len(entries) != 1:
-        pytest.skip(f"expected one entry for {search_filter}, found {len(entries)}")
+        # Deliberately a failure, not a skip.  A directory is configured, so the
+        # only reason to find nothing is that this suite or the CI fixture is
+        # wrong -- and skipping turned that into a green job that ran none of
+        # these tests at all.
+        pytest.fail(
+            f"expected exactly one entry under {base} for {search_filter}, found {len(entries)}; "
+            "the directory is not laid out the way this suite expects"
+        )
     return str(entries[0]["dn"])
+
+
+def _add_group(connection: Connection, dn: str, name: str, members: list[str]) -> None:
+    if not connection.add(dn, "groupOfNames", {"cn": name, "member": members}):
+        pytest.fail(f"could not create {dn}: {connection.result}")
 
 
 @pytest.fixture(scope="module")
 def fixture(admin_connection: Connection) -> Iterator[Fixture]:
-    """Find the seeded accounts, and add a second group to map to maintainer.
+    """Find the seeded accounts and build the groups the role tests need.
 
-    The container fixture creates one group holding both accounts, which can
-    neither distinguish the two roles nor show that ``admin`` wins a tie (3).
+    Alice lands in both groups and bob in one, which is what lets these tests
+    tell the two roles apart and show that ``admin`` wins a tie (3).
     """
     found = Fixture(
         alice=_one_dn(admin_connection, USER_BASE, USER_FILTER.format(username="alice")),
         bob=_one_dn(admin_connection, USER_BASE, USER_FILTER.format(username="bob")),
-        admin_group=_one_dn(admin_connection, USER_BASE, "(cn=repo-admins)"),
     )
-    admin_connection.add(
-        MAINTAINER_GROUP,
-        "groupOfNames",
-        {"cn": "repo-maintainers", "member": [found.bob, found.alice]},
-    )
+    _add_group(admin_connection, ADMIN_GROUP, "repoman-admins", [found.alice])
+    _add_group(admin_connection, MAINTAINER_GROUP, "repoman-maintainers", [found.alice, found.bob])
     try:
         yield found
     finally:
-        admin_connection.delete(MAINTAINER_GROUP)
+        for group in (ADMIN_GROUP, MAINTAINER_GROUP):
+            admin_connection.delete(group)
 
 
 @pytest.fixture
@@ -120,7 +139,7 @@ def directory_settings(make_settings: SettingsFactory, fixture: Fixture) -> Sett
             "ldap_group_mode": "search",
             "ldap_group_base_dn": USER_BASE,
             "ldap_group_filter": "(member={user_dn})",
-            "ldap_group_admin": fixture.admin_group,
+            "ldap_group_admin": ADMIN_GROUP,
             "ldap_group_maintainer": MAINTAINER_GROUP,
         }
         return make_settings(**{**defaults, **overrides})
@@ -199,7 +218,7 @@ def test_group_membership_maps_to_a_role(authenticator: LdapAuthenticator) -> No
 
 
 def test_admin_wins_when_a_user_is_in_both_groups(authenticator: LdapAuthenticator) -> None:
-    """Alice is in the container's group and in the one added above (3)."""
+    """Alice is a member of both groups the fixture created (3)."""
     assert authenticator.authenticate("alice", "alicepass").role is Role.ADMIN
 
 

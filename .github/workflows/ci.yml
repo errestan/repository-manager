@@ -90,7 +90,9 @@ jobs:
           LDAP_ADMIN_PASSWORD: adminpassword
           LDAP_USERS: alice,bob
           LDAP_PASSWORDS: alicepass,bobpass
-          LDAP_GROUP: repo-admins
+          # No LDAP_GROUP: a subtree search never found the group this image is
+          # supposed to seed, so the tests create the groups they need from the
+          # two user entries, which the image does reliably provide.
     steps:
       - uses: actions/checkout@v4
 
@@ -120,11 +122,13 @@ jobs:
           REPOMAN_LDAP_BIND_DN: cn=admin,dc=example,dc=test
           REPOMAN_LDAP_BIND_PASSWORD: adminpassword
           REPOMAN_LDAP_USER_BASE_DN: ou=users,dc=example,dc=test
-          # Present so the settings validate; the tests below resolve the real
-          # group DNs from the directory and override these.
-          REPOMAN_LDAP_GROUP_ADMIN: cn=repo-admins,ou=users,dc=example,dc=test
-          REPOMAN_LDAP_GROUP_MAINTAINER: cn=repo-maintainers,ou=users,dc=example,dc=test
-        run: uv run pytest -m integration -v
+          # Present so the settings validate; the tests create their own groups
+          # and override these.
+          REPOMAN_LDAP_GROUP_ADMIN: cn=repoman-admins,ou=users,dc=example,dc=test
+          REPOMAN_LDAP_GROUP_MAINTAINER: cn=repoman-maintainers,ou=users,dc=example,dc=test
+        # -rs prints the reason for every skip: a directory test that quietly
+        # opts out must not look the same as one that passed.
+        run: uv run pytest -m integration -v -rs
 
   e2e:
     name: Browser and accessibility (mounted at ${{ matrix.mount || '/' }})
