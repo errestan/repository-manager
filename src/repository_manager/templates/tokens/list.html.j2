@@ -1,0 +1,135 @@
+{% extends "base.html.j2" %}
+{% from "partials/tables.html.j2" import scrollable %}
+{% from "partials/forms.html.j2" import error_summary, text_field, checkbox_group %}
+{% from "partials/notice.html.j2" import notice %}
+{% block title %}
+  {% if form.errors %}Error: {% endif %}API tokens — Repository Manager
+{% endblock %}
+{% block description %}
+  Create and revoke the API tokens that let CI publish packages.
+{% endblock %}
+{% block content %}
+  <h1>API tokens</h1>
+  {% if request.query_params.get('revoked') %}
+    {{ notice('Token “' ~ request.query_params.get('revoked') ~ '” was revoked and stopped working immediately.') }}
+  {% endif %}
+  {{ error_summary(form) }}
+  {% if minted %}
+    {#
+      The one time this value exists outside the database. role="alert" rather
+      than role="status": if it is missed it cannot be recovered, so it is worth
+      interrupting for (specification.md 11).
+    #}
+    <div class="callout callout-strong"
+         role="alert"
+         tabindex="-1"
+         id="new-token">
+      <h2>Copy this token now</h2>
+      <p>
+        This is the only time it will be shown. It is not stored anywhere it can be read back —
+        if it is lost, revoke it and create another.
+      </p>
+      <p>
+        <code class="token-secret">{{ minted.secret }}</code>
+      </p>
+      <p>
+        Send it as an <code>Authorization: Bearer</code> header, and keep it somewhere your CI
+        system treats as a secret rather than in a checked-in file.
+      </p>
+    </div>
+  {% endif %}
+  <p class="lede">
+    A token lets a script do the things you can do, and never more: what it may do is its
+    permissions narrowed by the role your account has in the directory at the time it is used.
+    Lose the role and the token stops working, without anyone having to revoke it.
+    {% if api_docs %}
+      <a href="{{ url_for('api_reference') }}">The API reference</a> shows what to call with it.
+    {% endif %}
+  </p>
+  {% if tokens %}
+    {% call scrollable("API tokens") %}
+      <table class="data-table">
+        <caption>
+          {% if shows_every_owner %}
+            Every token on this instance. You may revoke any of them.
+          {% else %}
+            Your tokens.
+          {% endif %}
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Label</th>
+            {% if shows_every_owner %}<th scope="col">Owner</th>{% endif %}
+            <th scope="col">Starts with</th>
+            <th scope="col">Permissions</th>
+            <th scope="col">Repositories</th>
+            <th scope="col">Expires</th>
+            <th scope="col">Last used</th>
+            <th scope="col">State</th>
+            <th scope="col"><span class="visually-hidden">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for token in tokens %}
+            <tr>
+              <th scope="row">{{ token.label }}</th>
+              {% if shows_every_owner %}<td>{{ token.owner_username }}</td>{% endif %}
+              <td>
+                <code>{{ token.prefix }}…</code>
+              </td>
+              <td>{{ token.scopes.replace(',', ', ') }}</td>
+              <td>
+                {% if token.unrestricted %}
+                  <span class="muted">All</span>
+                {% else %}
+                  {{ token.repositories | join(", ") }}
+                {% endif %}
+              </td>
+              <td>
+                <time datetime="{{ token.expires_at.isoformat() }}">{{ token.expires_at.strftime("%Y-%m-%d") }}</time>
+              </td>
+              <td>
+                {% if token.last_used_at %}
+                  <time datetime="{{ token.last_used_at.isoformat() }}">{{ token.last_used_at.strftime("%Y-%m-%d %H:%M") }}</time>
+                {% else %}
+                  <span class="muted">Never</span>
+                {% endif %}
+              </td>
+              <td>{{ token.state }}</td>
+              <td>
+                {% if not token.revoked %}
+                  <form method="post"
+                        action="{{ url_for('token_revoke', token_id=token.id) }}"
+                        class="inline-form">
+                    {% include "partials/csrf.html.j2" %}
+                    <button type="submit" class="button-danger">
+                      Revoke<span class="visually-hidden"> the token {{ token.label }}</span>
+                    </button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+  {% else %}
+    <p>You have no API tokens. Create one below to publish packages from a script.</p>
+  {% endif %}
+  <h2 id="create">Create a token</h2>
+  <form method="post"
+        action="{{ url_for('token_create') }}"
+        class="stacked-form">
+    {% include "partials/csrf.html.j2" %}
+    {{ text_field(form, 'label', 'Label', required=True,
+      hint='What this token is for, so you can recognise it here later — for example “build server”.') }}
+    {{ checkbox_group(form, 'scopes', 'What may it do?', scopes, form.values.get('scopes', []),
+      hint='A token can never do more than your account may.') }}
+    {{ checkbox_group(form, 'repositories', 'Which repositories?', repository_options,
+      form.values.get('repositories', []),
+      hint='Leave every box clear to allow all repositories, including ones added later.') }}
+    {{ text_field(form, 'lifetime_days', 'Valid for (days)', type='number', required=True,
+      hint='Between 1 and ' ~ max_days ~ '. The default is ' ~ default_days ~ '.') }}
+    <button type="submit" class="button-primary">Create token</button>
+  </form>
+{% endblock %}

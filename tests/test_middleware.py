@@ -7,9 +7,10 @@ import re
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from repository_manager.models import Repository
-from tests.conftest import AppFactory
+from tests.conftest import AppFactory, issue_token
 
 PROXY = ("127.0.0.1", 5555)
 STRANGER = ("203.0.113.99", 5555)
@@ -215,3 +216,48 @@ def test_no_prefix_appears_when_mounted_at_the_root(
         links = _paths(client.get("/").text)
     assert links
     assert not any(link.startswith("/repoman") for link in links), links
+
+
+def test_the_current_page_is_marked_under_a_prefix(
+    make_app: AppFactory, apt_repository: Repository
+) -> None:
+    """`aria-current="page"` has to survive a sub-path deployment (11, 13.5).
+
+    The prefix appears in ``scope["path"]`` and again in ``root_path``, so a
+    page that recombined the two compared ``/repoman/repoman/`` against
+    ``/repoman/`` and marked nothing at all.
+    """
+    app = make_app(public_url="https://packages.example.test/repoman", root_path="/repoman")
+    with TestClient(app) as client:
+        at_root = client.get("/repoman/").text
+        at_keys = client.get("/repoman/keys").text
+    assert 'aria-current="page"' in at_root
+    assert 'aria-current="page"' in at_keys
+
+
+def test_the_api_is_recognised_under_a_prefix(
+    make_app: AppFactory, sync_session: Session, apt_repository: Repository
+) -> None:
+    """The token gate keys on the routed path, not the raw one (7.4, 13.5).
+
+    Getting this wrong would not be a 404: the request would fall through to
+    the session-authenticated branch, which is a security boundary in the wrong
+    place.
+    """
+    app = make_app(public_url="https://packages.example.test/repoman", root_path="/repoman")
+    token = issue_token(sync_session)
+    with TestClient(app, base_url="https://packages.example.test") as client:
+        response = client.post(
+            "/repoman/api/v1/repositories/internal/regenerate", headers=token.header
+        )
+    assert response.status_code == 202
+
+
+def test_a_probe_is_not_logged_under_a_prefix(
+    make_app: AppFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Health checks run once a second; the log filter has to see through the prefix."""
+    app = make_app(public_url="https://packages.example.test/repoman", root_path="/repoman")
+    with TestClient(app) as client, caplog.at_level("INFO"):
+        client.get("/repoman/healthz")
+    assert not [record for record in caplog.records if record.msg == "request"]

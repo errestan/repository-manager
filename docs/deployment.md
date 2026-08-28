@@ -299,6 +299,48 @@ Every state-changing request is checked twice: an `Origin`/`Referer` comparison 
 This is why `REPOMAN_PUBLIC_URL` must be the externally visible origin. If it does not match
 what the browser used, every form submission is refused.
 
+## API tokens
+
+Machines authenticate with bearer tokens rather than sessions; people create them on
+`/tokens`, and [`docs/api.md`](api.md) covers using them. Three things about them matter to
+whoever runs the instance.
+
+**They are accepted under `/api/v1` and nowhere else.** A token presented to the web
+interface does nothing at all, and a session cookie sent to the API does nothing either —
+the cookie is never read there, which is why cross-site request forgery is not a concern on
+that half and why being signed in as an admin is not a route into the API.
+
+**They expire, and the ceiling is yours to set.** `REPOMAN_TOKEN_DEFAULT_LIFETIME_DAYS`
+(default `90`) is what the form offers; `REPOMAN_TOKEN_MAX_LIFETIME_DAYS` (default `365`) is
+the most anyone may choose. The default must not exceed the ceiling, and startup fails if it
+does.
+
+**They are re-checked against the directory, not trusted from when they were made.** A
+token's permissions are its granted scopes intersected with its owner's *current* role, so
+an account that leaves the maintainer group takes its tokens' write access with it. The role
+is cached for `REPOMAN_SESSION_REVALIDATE_MINUTES` (default `15`) — the same interval
+browser sessions use — because resolving it per request would put an LDAP round trip in
+front of every upload in a pipeline. Revocation, by contrast, is immediate: the next request
+after a token is revoked is refused.
+
+Only the owner and any admin can revoke a token; the tokens page shows an admin every
+account's, and everyone else only their own.
+
+If the directory is unreachable, writes answer `503` with `Retry-After` rather than either
+failing open or signing everyone out, and reads keep working — they need no role.
+
+### The OpenAPI schema and reference page
+
+Each instance serves its own schema at `/api/v1/openapi.json` and a reference page rendered
+from it at `/api/docs`. Both are anonymous, and both describe endpoints that are themselves
+either anonymous or refuse without a token, so publishing them tells a reader nothing that
+trying the API would not. `REPOMAN_API_DOCS_ENABLED=false` removes the pair; the API itself
+is unaffected.
+
+The reference page is rendered by this application rather than by Swagger UI or ReDoc. Both
+of those fetch their assets from a public CDN, and the Content-Security-Policy allows no
+remote origins — they would render blank.
+
 ## The audit log
 
 Every change is recorded with who, what, which repository, from where, and whether it

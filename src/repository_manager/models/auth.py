@@ -61,8 +61,11 @@ class Role(enum.StrEnum):
 
 class ActorType(enum.StrEnum):
     USER = "user"
-    #: An API token acting on its owner's behalf (M5).  The literal is the name
-    #: of a credential kind, not a credential.
+    #: An API token acting on its owner's behalf (7.4).  Recorded as its own
+    #: kind rather than folded into USER because "who did this" and "through
+    #: what" are different questions: the actor is still the owner's DN, and the
+    #: token that carried the request is named in ``details``.  The literal is
+    #: the name of a credential kind, not a credential.
     TOKEN = "token"  # noqa: S105
     #: The application acting on its own behalf, e.g. restart recovery re-queuing
     #: a job nobody asked for a second time.
@@ -104,6 +107,8 @@ class AuditAction(enum.StrEnum):
     PACKAGE_UPLOAD = "package_upload"
     PACKAGE_REMOVE = "package_remove"
     REGENERATE = "regenerate"
+    TOKEN_MINT = "token_mint"  # noqa: S105 - an action name, not a credential
+    TOKEN_REVOKE = "token_revoke"  # noqa: S105 - an action name, not a credential
 
     @property
     def label(self) -> str:
@@ -120,6 +125,8 @@ class AuditAction(enum.StrEnum):
             AuditAction.PACKAGE_UPLOAD: "Upload package",
             AuditAction.PACKAGE_REMOVE: "Remove package",
             AuditAction.REGENERATE: "Regenerate metadata",
+            AuditAction.TOKEN_MINT: "Create API token",
+            AuditAction.TOKEN_REVOKE: "Revoke API token",
         }[self]
 
 

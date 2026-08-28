@@ -1,0 +1,127 @@
+{% extends "base.html.j2" %}
+{% from "partials/tables.html.j2" import scrollable %}
+{% block title %}REST API — Repository Manager{% endblock %}
+{% block description %}
+  Reference for the token-authenticated REST API: publishing packages from CI, and polling for publication.
+{% endblock %}
+{% block content %}
+  <h1>REST API</h1>
+  <p class="lede">
+    Everything the web interface does to packages can be done from a script. Version
+    <code>{{ api_version }}</code>; the machine-readable schema is at
+    <a href="{{ schema_url }}">{{ schema_url }}</a>.
+  </p>
+  <h2 id="authentication">Authentication</h2>
+  <p>
+    Write endpoints need an API token, sent as a bearer credential. Create one on the
+    <a href="{{ url_for('token_list') }}">tokens page</a>; it is shown once and stored only as a hash,
+    so keep it wherever your CI system keeps its secrets.
+  </p>
+  <pre class="snippet" role="region" aria-label="Sending an API token" tabindex="0"><code>curl --fail-with-body \
+  --header "Authorization: Bearer $REPOMAN_TOKEN" \
+  ...</code></pre>
+  <p>
+    A token can never do more than the account that made it. Its permissions are narrowed by that
+    account's directory role every time it is used, so an account that loses access takes its tokens
+    with it — no revocation needed. Read endpoints need no token at all: repository listings and
+    package listings are public, exactly as they are in this interface.
+  </p>
+  <h2 id="errors">Errors</h2>
+  <p>
+    Every failure is a <code>application/problem+json</code> document (RFC 9457) with a stable
+    <code>type</code>, a <code>title</code>, the <code>status</code>, and a <code>detail</code>
+    written to be read in a failed build log. Types are prefixed
+    <code>{{ problem_prefix }}</code>, so a pipeline can tell a conflict from a permission problem
+    without matching on prose.
+  </p>
+  <pre class="snippet" role="region" aria-label="An example problem document" tabindex="0"><code>{
+  "type": "{{ problem_prefix }}conflict",
+  "title": "Conflict",
+  "status": 409,
+  "detail": "hello 1.0 (amd64) is already published with different contents. ...",
+  "instance": "/api/v1/repositories/internal/packages"
+}</code></pre>
+  <h2 id="publishing">Publishing from CI</h2>
+  <p>
+    An upload returns the package it created and the id of the job that rebuilds the repository
+    metadata. The package is not installable until that job succeeds, so a pipeline that needs to
+    depend on it should poll rather than assume.
+  </p>
+  <pre class="snippet" role="region" aria-label="Publishing from a shell script and waiting for the job" tabindex="0"><code>upload=$(curl --fail-with-body --silent \
+  --header "Authorization: Bearer $REPOMAN_TOKEN" \
+  --form file=@build/hello_1.0_amd64.deb \
+  --form distribution=bookworm \
+  --form component=main \
+  "$REPOMAN_URL/api/v1/repositories/internal/packages")
+
+job=$(printf '%s' "$upload" | jq -r '.job_id // empty')
+
+while [ -n "$job" ]; do
+  state=$(curl --fail-with-body --silent \
+    --header "Authorization: Bearer $REPOMAN_TOKEN" \
+    "$REPOMAN_URL/api/v1/jobs/$job" | jq -r .state)
+  case "$state" in
+    succeeded) break ;;
+    failed|cancelled) echo "publication $state" >&2; exit 1 ;;
+  esac
+  sleep 2
+done</code></pre>
+  <p>
+    Re-uploading a byte-identical package is a success and returns <code>200</code> with
+    <code>"created": false</code>, so a retried step does not fail. Uploading
+    <em>different</em> bytes under a version that already exists is a <code>409</code> and always
+    will be: someone may already have installed the old file.
+  </p>
+  <h2 id="endpoints">Endpoints</h2>
+  {% for endpoint in endpoints %}
+    <h3 id="op-{{ loop.index }}">
+      <code>{{ endpoint.method }} {{ endpoint.path }}</code>
+    </h3>
+    <p>
+      <strong>{{ endpoint.summary }}</strong>
+      {% if endpoint.authenticated %}
+        <span class="badge">Token required</span>
+      {% else %}
+        <span class="badge badge-quiet">Anonymous</span>
+      {% endif %}
+    </p>
+    {% for paragraph in endpoint.description.split('\n\n') %}
+      {% if paragraph.strip() %}<p>{{ paragraph.strip() }}</p>{% endif %}
+    {% endfor %}
+    {% if endpoint.parameters or endpoint.body %}
+      {% call scrollable(endpoint.method ~ ' ' ~ endpoint.path ~ ' parameters') %}
+        <table class="data-table">
+          <caption>Parameters for {{ endpoint.method }} {{ endpoint.path }}.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">In</th>
+              <th scope="col">Type</th>
+              <th scope="col">Required</th>
+              <th scope="col">Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for parameter in endpoint.parameters + endpoint.body %}
+              <tr>
+                <th scope="row">
+                  <code>{{ parameter.name }}</code>
+                </th>
+                <td>{{ parameter.location }}</td>
+                <td>{{ parameter.schema_type }}</td>
+                <td>{{ 'Yes' if parameter.required else 'No' }}</td>
+                <td>{{ parameter.description }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endcall %}
+    {% endif %}
+    <p class="field-hint">
+      Responses:
+      {% for code, description in endpoint.statuses %}
+        <code>{{ code }}</code> {{ description }}{{ '' if loop.last else '; ' }}
+      {% endfor %}
+    </p>
+  {% endfor %}
+{% endblock %}

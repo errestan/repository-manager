@@ -337,3 +337,35 @@ def test_an_idle_timeout_longer_than_the_lifetime_is_refused() -> None:
 def test_session_durations_must_be_positive(field: str) -> None:
     with pytest.raises(ConfigError):
         load_settings(**{**BASE, field: 0})
+
+
+# --------------------------------------------------------------- API tokens (7.4)
+
+
+def test_token_lifetimes_have_the_specified_defaults() -> None:
+    settings = load_settings(**BASE)
+    assert settings.token_default_lifetime_days == 90
+    assert settings.token_max_lifetime_days == 365
+
+
+def test_a_default_token_lifetime_over_the_maximum_is_refused() -> None:
+    """Every mint would be refused as soon as anyone accepted the default."""
+    with pytest.raises(ConfigError, match="longer than token_max_lifetime_days"):
+        load_settings(
+            **{**BASE, "token_default_lifetime_days": 400, "token_max_lifetime_days": 365}
+        )
+
+
+@pytest.mark.parametrize("field", ["token_default_lifetime_days", "token_max_lifetime_days"])
+def test_token_lifetimes_must_be_positive(field: str) -> None:
+    with pytest.raises(ConfigError):
+        load_settings(**{**BASE, field: 0})
+
+
+def test_the_api_documentation_is_served_by_default() -> None:
+    """It describes endpoints that are anonymous or refuse without a token (8.2)."""
+    assert load_settings(**BASE).api_docs_enabled is True
+
+
+def test_the_api_documentation_can_be_switched_off() -> None:
+    assert load_settings(**BASE, api_docs_enabled=False).api_docs_enabled is False

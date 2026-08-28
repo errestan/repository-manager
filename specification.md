@@ -397,11 +397,20 @@ POST   /api/v1/repositories/{slug}/regenerate
 GET    /api/v1/jobs/{id}
 ```
 
-- Read endpoints are anonymous, matching the web UI.
+- Read endpoints are anonymous, matching the web UI. `GET /api/v1/jobs/{id}` is the exception
+  and requires a token, because a job record carries the log excerpt of whatever ran — which
+  is what the web UI's own job pages are gated on (§8.1).
 - Write endpoints require a token with `package:write` and repository scope.
 - Errors use RFC 9457 `application/problem+json`.
 - Upload responses include the created package and the enqueued job ID so CI can poll for
   publication rather than guessing.
+- The schema is served at `/api/v1/openapi.json` and a reference page at `/api/docs`;
+  `REPOMAN_API_DOCS_ENABLED=false` removes both. The reference page is rendered from the
+  schema by this application rather than by Swagger UI or ReDoc: both fetch their assets from
+  a public CDN, which §10.1's Content-Security-Policy forbids, so both would render blank.
+- Session cookies are never read under `/api/v1`. CSRF (§7.3) is therefore not enforced
+  there — a bearer token is not a credential a browser attaches on its own — and being signed
+  in as an admin is not a way into the API.
 
 ---
 
@@ -575,6 +584,8 @@ Key settings:
 | `REPOMAN_MAX_UPLOAD_BYTES` | `2147483648` | Upload cap |
 | `REPOMAN_JOB_CONCURRENCY` | `2` | Worker pool size |
 | `REPOMAN_TOKEN_MAX_LIFETIME_DAYS` | `365` | Ceiling on token expiry |
+| `REPOMAN_TOKEN_DEFAULT_LIFETIME_DAYS` | `90` | What the token form offers when nobody chooses (§7.4); must not exceed the ceiling |
+| `REPOMAN_API_DOCS_ENABLED` | `true` | Serve the OpenAPI schema and the reference page (§8.2); the API itself is unaffected |
 | `REPOMAN_LOG_FORMAT` | `json` | `json` or `console` |
 | `REPOMAN_ENV` | `production` | Guards debug features |
 
@@ -590,7 +601,9 @@ no way for anyone to sign in and therefore no way to change anything.
 
 Sessions (§7.2) add `REPOMAN_SESSION_IDLE_TIMEOUT_MINUTES` (default `480`),
 `REPOMAN_SESSION_ABSOLUTE_LIFETIME_MINUTES` (`1440`) and `REPOMAN_SESSION_REVALIDATE_MINUTES`
-(`15`). The remaining `REPOMAN_LDAP_*` settings — bind mode and its DNs, group resolution
+(`15`). The last of these also governs API tokens: a token owner's role is re-resolved from
+the directory on that interval rather than on every request, so a pipeline uploading twenty
+packages does not make twenty LDAP round trips (§7.4). The remaining `REPOMAN_LDAP_*` settings — bind mode and its DNs, group resolution
 mode, nesting, display-name attributes, timeouts — are documented in `docs/deployment.md`.
 
 ---

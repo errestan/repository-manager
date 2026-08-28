@@ -191,6 +191,18 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(default=2_147_483_648, gt=0)
     job_concurrency: int = Field(default=2, gt=0)
     token_max_lifetime_days: int = Field(default=365, gt=0)
+    # What the token form offers when nobody chooses (7.4).  Ninety days is
+    # short enough that a forgotten token stops working within a quarter and
+    # long enough that renewing it is not a weekly chore.
+    token_default_lifetime_days: int = Field(default=90, gt=0)
+
+    # -- REST API (8.2) ----------------------------------------------------
+    # The OpenAPI schema and the reference page it feeds.  Both are anonymous
+    # reads describing endpoints that are themselves anonymous or token-gated,
+    # so there is nothing here an attacker learns that `curl` would not tell
+    # them -- but a deployment that would rather not publish its shape can turn
+    # the pair off.
+    api_docs_enabled: bool = True
 
     # -- behaviour ---------------------------------------------------------
     log_format: Literal["json", "console"] = "json"
@@ -363,6 +375,17 @@ class Settings(BaseSettings):
                 f"session_idle_timeout_minutes ({self.session_idle_timeout_minutes}) is longer "
                 f"than session_absolute_lifetime_minutes "
                 f"({self.session_absolute_lifetime_minutes}), so it could never take effect"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _token_lifetimes_are_ordered(self) -> Settings:
+        """A default longer than the maximum would fail every mint (7.4)."""
+        if self.token_default_lifetime_days > self.token_max_lifetime_days:
+            raise ValueError(
+                f"token_default_lifetime_days ({self.token_default_lifetime_days}) is longer "
+                f"than token_max_lifetime_days ({self.token_max_lifetime_days}), so the "
+                "default would be refused as soon as anyone accepted it"
             )
         return self
 

@@ -314,6 +314,7 @@ def pages(live_server: str) -> list[str]:
         f"{live_server}/repositories/el9",
         f"{live_server}/repositories/internal/packages",
         f"{live_server}/keys",
+        f"{live_server}/api/docs",
     ]
 
 
@@ -330,6 +331,7 @@ def management_pages(live_server: str) -> list[str]:
         f"{live_server}/jobs/1",
         f"{live_server}/jobs/2",
         f"{live_server}/audit",
+        f"{live_server}/tokens",
     ]
 
 

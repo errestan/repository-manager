@@ -6,14 +6,15 @@ Create repositories, upload and remove packages, and have the indices and GPG si
 regenerated correctly — without hand-running `apt-ftparchive` or `createrepo_c`.
 
 > **Status: pre-alpha.** The specification is complete
-> ([`specification.md`](specification.md)). **M1–M4 are done**: configuration, database and
+> ([`specification.md`](specification.md)). **M1–M5 are done**: configuration, database and
 > migrations, the accessible layout, health probes and sub-path/proxy handling (M1); APT
 > repository creation, signing keys, upload and removal, pure-Python index generation and
 > the job queue, verified against a real `apt-get` (M2); LDAP login, server-side sessions,
-> CSRF, role mapping and the audit log (M3); and RPM repositories with variants,
-> `createrepo_c` indexing and `repomd.xml` signing, verified against a real `dnf` (M4).
-> Still missing: the REST API and scoped tokens (M5), and rate limiting, retention
-> enforcement and metrics (M6). Not usable in production.
+> CSRF, role mapping and the audit log (M3); RPM repositories with variants, `createrepo_c`
+> indexing and `repomd.xml` signing, verified against a real `dnf` (M4); and scoped API
+> tokens with a JSON REST API and OpenAPI schema (M5).
+> Still missing: rate limiting, retention enforcement, rescan and metrics (M6).
+> Not usable in production.
 
 ## Features
 
@@ -24,7 +25,9 @@ regenerated correctly — without hand-running `apt-ftparchive` or `createrepo_c
 - **GPG signing** of repository metadata, with keys imported or generated in-app.
 - **LDAP authentication** with group-mapped roles. Reading is open to everyone; changes are
   authenticated and audited.
-- **Scoped API tokens** so CI can publish packages without an interactive login.
+- **Scoped API tokens** so CI can publish packages without an interactive login — limited to
+  chosen repositories, expiring by default, and never able to do more than the account that
+  minted them. See [Publishing from CI](docs/api.md).
 - **Accessible** — WCAG 2.2 AA, screen-reader tested, works without JavaScript, follows your
   system light/dark preference.
 
@@ -91,6 +94,23 @@ docker run -p 8000:8000 \
   -v repoman-data:/var/lib/repoman \
   ghcr.io/errestan/repository-manager:latest
 ```
+
+## Publishing from a pipeline
+
+```sh
+curl --fail-with-body --silent \
+  --header "Authorization: Bearer $REPOMAN_TOKEN" \
+  --form file=@build/hello_1.0-1_amd64.deb \
+  --form distribution=bookworm \
+  --form component=main \
+  "$REPOMAN_URL/api/v1/repositories/internal/packages"
+```
+
+The response carries the package it published and the id of the job rebuilding the
+repository metadata, so a pipeline that needs the package to be installable can wait rather
+than guess. [`docs/api.md`](docs/api.md) covers tokens, polling, error handling and
+ready-made GitHub Actions and GitLab CI steps; each instance also serves its own reference
+at `/api/docs` and an OpenAPI schema at `/api/v1/openapi.json`.
 
 ## Deployment shape
 

@@ -48,11 +48,13 @@ def csp_nonce(request: Request) -> str:
 def current_path(request: Request) -> str:
     """The externally visible path of this request, prefix included.
 
-    Composed here rather than read from ``request.url.path`` because the proxy
-    middleware has already split the prefix into ``root_path``; recombining the
-    two explicitly gives the same answer under either proxy style.
+    ``scope["path"]`` already carries the prefix under either proxy style --
+    the one that passes it through in the path, and the one that strips it and
+    is put back by :class:`~repository_manager.web.middleware.ProxyHeadersMiddleware`.
+    Templates compare this against ``url_for(...).path`` to mark the current
+    page, and that value carries the prefix exactly once.
     """
-    return f"{request.scope.get('root_path', '')}{request.scope.get('path', '')}" or "/"
+    return str(request.scope.get("path", "")) or "/"
 
 
 def build_templates() -> Jinja2Templates:
@@ -94,6 +96,11 @@ def render(
         "current_path": current_path(request),
         "identity": identity,
         "csrf_token": identity.csrf_token,
+        # Whether the API reference route exists at all (8.2, 12).  A template
+        # that linked to it unconditionally would raise NoMatchFound on an
+        # instance with the documentation switched off, which is a broken page
+        # rather than a missing link.
+        "api_docs": bool(request.app.state.settings.api_docs_enabled),
         **(context or {}),
     }
     return templates.TemplateResponse(

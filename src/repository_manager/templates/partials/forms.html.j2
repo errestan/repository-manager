@@ -126,3 +126,34 @@
     {% endfor %}
   </fieldset>
 {% endmacro %}
+{#
+  A group of checkboxes, for a question with more than one right answer.
+
+  A <fieldset> for the same reason radio_group uses one: without it each box is
+  announced with only its own label, and "main" on its own does not tell anyone
+  what they are agreeing to.  `checked` is a set of the values already chosen,
+  so a rejected form comes back with the boxes the person actually ticked.
+#}
+{% macro checkbox_group(form, name, legend, options, checked, hint=None) %}
+  {% set message = form.messages.get(name) %}
+  {% set described = _described(name, hint, message) | trim %}
+  <fieldset class="field{{ ' field-invalid' if message else '' }}"
+            {% if described %}aria-describedby="{{ described }}"{% endif %}>
+    <legend id="field-{{ name }}">{{ legend }}</legend>
+    {{ _messages(name, hint, message) }}
+    {% for value, option_label, option_hint in options %}
+      <div class="checkbox-option">
+        <input type="checkbox"
+               id="field-{{ name }}-{{ loop.index }}"
+               name="{{ name }}"
+               value="{{ value }}"
+               {% if option_hint %}aria-describedby="hint-{{ name }}-{{ loop.index }}"{% endif %}
+               {% if value in checked %}checked{% endif %}>
+        <label for="field-{{ name }}-{{ loop.index }}">{{ option_label }}</label>
+        {% if option_hint %}
+          <p class="field-hint" id="hint-{{ name }}-{{ loop.index }}">{{ option_hint }}</p>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </fieldset>
+{% endmacro %}

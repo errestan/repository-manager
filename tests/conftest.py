@@ -7,6 +7,7 @@ migrations and the models have not drifted apart.
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 import re
 import shutil
@@ -25,6 +26,7 @@ from repository_manager import migrate
 from repository_manager.config import Settings, load_settings
 from repository_manager.db import create_engine, create_sessionmaker
 from repository_manager.models import (
+    ApiToken,
     AptArchitecture,
     AptComponent,
     AptDistribution,
@@ -33,8 +35,12 @@ from repository_manager.models import (
     RepositoryType,
     RpmVariant,
     SigningKey,
+    TokenScope,
+    encode_scopes,
 )
+from repository_manager.models.base import utcnow
 from repository_manager.security.gpg import GnuPG
+from repository_manager.services import tokens as token_service
 from repository_manager.web.app import create_app
 from tests.support import directory as fake_directory
 from tests.support.directory import FakeDirectory
@@ -405,3 +411,74 @@ def failing_createrepo(
     """The same stand-in, told to exit non-zero with something on stderr."""
     monkeypatch.setenv("FAKE_CREATEREPO_FAIL", "1")
     return fake_createrepo
+
+
+# --------------------------------------------------------------------- API tokens
+
+
+@dataclass(frozen=True)
+class IssuedToken:
+    """A token row and the secret to present it with."""
+
+    record_id: int
+    secret: str
+    owner_dn: str
+
+    @property
+    def header(self) -> dict[str, str]:
+        return {"authorization": f"Bearer {self.secret}"}
+
+
+def issue_token(
+    session: Session,
+    *,
+    owner: str = fake_directory.MAINTAINER_USERNAME,
+    scopes: tuple[TokenScope, ...] = (TokenScope.PACKAGE_READ, TokenScope.PACKAGE_WRITE),
+    repositories: tuple[str, ...] = (),
+    label: str = "ci",
+    expires_in_days: int = 30,
+    revoked: bool = False,
+) -> IssuedToken:
+    """Insert a token directly, for tests that need one without a browser.
+
+    Built through the service's own hashing and prefixing rather than by hand,
+    so a change to the token format cannot leave these fixtures minting
+    something the authentication path no longer recognises.
+    """
+    secret = token_service.generate()
+    now = utcnow()
+    record = ApiToken(
+        owner_dn=fake_directory.dn_for(owner),
+        owner_username=owner,
+        label=label,
+        prefix=token_service.prefix_of(secret),
+        token_hash=token_service.hash_token(secret),
+        scopes=encode_scopes(set(scopes)),
+        repository_scope=",".join(repositories) or None,
+        created_at=now,
+        expires_at=now + dt.timedelta(days=expires_in_days),
+        revoked_at=now if revoked else None,
+    )
+    session.add(record)
+    session.commit()
+    session.refresh(record)
+    return IssuedToken(record_id=record.id, secret=secret, owner_dn=record.owner_dn)
+
+
+@pytest.fixture
+def write_token(sync_session: Session) -> IssuedToken:
+    """A maintainer's token carrying both scopes, for every repository."""
+    return issue_token(sync_session)
+
+
+@pytest.fixture
+def read_token(sync_session: Session) -> IssuedToken:
+    return issue_token(sync_session, scopes=(TokenScope.PACKAGE_READ,), label="read only")
+
+
+@pytest.fixture
+def api_client(app: FastAPI, write_token: IssuedToken) -> Iterator[TestClient]:
+    """A client presenting a full-permission token on every request."""
+    with browser(app) as test_client:
+        test_client.headers.update(write_token.header)
+        yield test_client

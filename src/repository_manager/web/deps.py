@@ -7,6 +7,14 @@ new route is a permission layer that will eventually be forgotten on one.  The
 gate itself only *establishes* identity and rejects forged requests; deciding
 what a given role may do is :func:`require_role`'s job, and a route with no
 ``require_role`` is anonymous by design (AD-16).
+
+The REST API is the one place the gate takes a different path.  Requests under
+``/api`` are authenticated by bearer token and by nothing else: the session
+cookie is not read there, which is what makes CSRF irrelevant rather than
+merely unlikely -- there is no ambient credential for a forged cross-origin
+request to spend.  The reverse also holds: a bearer token is ignored everywhere
+outside ``/api`` (7.4), so a leaked token cannot be replayed against the HTML
+forms.
 """
 
 from __future__ import annotations
@@ -23,12 +31,15 @@ from starlette.templating import Jinja2Templates
 
 from repository_manager.auth import csrf, sessions
 from repository_manager.auth.ldap import Authenticator, LdapError, NoRoleAssignedError
+from repository_manager.auth.roles import RoleCache
 from repository_manager.config import Settings
 from repository_manager.jobs.queue import JobQueue
 from repository_manager.logging import get_logger
-from repository_manager.models import Role, UserSession
+from repository_manager.models import ApiToken, Role, TokenScope, UserSession
 from repository_manager.models.base import utcnow
-from repository_manager.web.middleware import client_ip
+from repository_manager.services import tokens as token_service
+from repository_manager.web.middleware import client_ip, route_path
+from repository_manager.web.problems import ApiError
 
 log = get_logger(__name__)
 
@@ -44,10 +55,37 @@ FORBIDDEN_DETAIL = "You do not have permission to do that."
 # Form-parsing limits, defined here rather than at the upload route because the
 # CSRF check below may have to read the body first -- and whichever read happens
 # first fixes the limits for the whole request, since Starlette caches the parsed
-# form.  Two files and a dozen fields is more than any form this application
-# serves; a request with more is not one of ours.
+# form.  Two files is more than any form this application serves.
+#
+# The field bound is looser than it looks: the token form (7.4) renders one
+# checkbox per repository, so a fixed dozen would have turned "an instance with
+# thirteen repositories" into a form nobody can submit.  Parsing a couple of
+# hundred short fields costs nothing, and the limit that actually bounds an
+# abusive body is `max_part_size`, which is the configured upload cap.
 MAX_FORM_FILES = 2
-MAX_FORM_FIELDS = 12
+MAX_FORM_FIELDS = 256
+
+#: Everything below this prefix is the REST API (8.2): token-authenticated,
+#: JSON in and problem+json out, and never session-authenticated.  It is the
+#: *versioned* prefix rather than ``/api``, which is what 7.4's "accepted on
+#: ``/api/**`` only" allows and what keeps the human-readable reference page at
+#: ``/api/docs`` an ordinary session-authenticated page -- it has a site header
+#: to render, and rendering it signed out to a signed-in reader would be a
+#: puzzle rather than a security property.  Kept in step with
+#: :data:`repository_manager.web.routes.api.API_PREFIX`, which cannot be
+#: imported here without a cycle.
+API_ROOT = "/api/v1"
+
+BEARER_SCHEME = "bearer"
+
+#: Sent with a 401 so a client is told how to authenticate rather than left to
+#: infer it.  ``realm`` names the API, not the deployment.
+WWW_AUTHENTICATE = 'Bearer realm="repository-manager"'
+
+CREDENTIAL_REJECTED = (
+    "That API token is not valid. It may have been revoked, or it may have expired; "
+    "mint a replacement on the tokens page."
+)
 
 
 @dataclass(frozen=True)
@@ -108,6 +146,51 @@ class Identity:
 ANONYMOUS = Identity()
 
 
+@dataclass(frozen=True)
+class TokenIdentity:
+    """The token behind an API request, snapshotted (7.4).
+
+    A snapshot for the same reason :class:`Identity` is one, and for one more:
+    the intersection with the owner's directory role is computed per request
+    from a live lookup, so nothing here is a permission by itself.  These are
+    the *ceiling* -- ``scopes`` is what was granted at mint time and
+    ``repositories`` is where it may be spent -- and :func:`require_scope` is
+    where the two halves meet.
+    """
+
+    token_id: int
+    owner_dn: str
+    owner_username: str
+    label: str
+    prefix: str
+    scopes: frozenset[TokenScope]
+    repositories: tuple[str, ...] = ()
+
+    @classmethod
+    def of(cls, record: ApiToken) -> TokenIdentity:
+        return cls(
+            token_id=record.id,
+            owner_dn=record.owner_dn,
+            owner_username=record.owner_username,
+            label=record.label,
+            prefix=record.prefix,
+            scopes=record.granted,
+            repositories=record.repositories,
+        )
+
+    def covers(self, slug: str) -> bool:
+        return not self.repositories or slug in self.repositories
+
+    @property
+    def audit_details(self) -> dict[str, Any]:
+        """What the audit trail records about the credential itself.
+
+        The prefix, never the token: it is enough to identify which row on the
+        tokens page did this, and it is already stored in the clear there.
+        """
+        return {"token_id": self.token_id, "token_prefix": self.prefix, "token_label": self.label}
+
+
 class LoginRequired(Exception):  # noqa: N818 - not an error condition; a redirect
     """A page needed a signed-in user, so send them to sign in.
 
@@ -143,6 +226,11 @@ def get_templates(request: Request) -> Jinja2Templates:
 def get_authenticator(request: Request) -> Authenticator:
     authenticator: Authenticator = request.app.state.authenticator
     return authenticator
+
+
+def get_role_cache(request: Request) -> RoleCache:
+    cache: RoleCache = request.app.state.role_cache
+    return cache
 
 
 def get_sessionmaker(request: Request) -> async_sessionmaker[AsyncSession]:
@@ -201,6 +289,81 @@ async def _revalidate(
     return record
 
 
+def is_api_request(request: Request) -> bool:
+    """Whether this request is for the REST API rather than the web interface.
+
+    Compared against the *routed* path, which is the request path with the
+    deployment's mount prefix removed.  Reading ``request.url.path`` instead
+    would answer "no" for every request under a sub-path deployment (13.5) --
+    and answering "no" here means falling through to the session-authenticated
+    branch, so the mistake would not be a 404 but a security boundary in the
+    wrong place.
+    """
+    routed = route_path(request.scope)
+    return routed == API_ROOT or routed.startswith(f"{API_ROOT}/")
+
+
+def _bearer_token(request: Request) -> str | None:
+    """The credential from ``Authorization: Bearer``, if there is one (7.4)."""
+    header = request.headers.get("authorization")
+    if not header:
+        return None
+    scheme, _, credential = header.partition(" ")
+    if scheme.lower() != BEARER_SCHEME:
+        return None
+    return credential.strip() or None
+
+
+async def _api_gate(request: Request, session: AsyncSession) -> None:
+    """Authenticate an API request by bearer token, and by nothing else (7.4, 8.2).
+
+    Three things do *not* happen here, each on purpose.
+
+    The session cookie is not read, so a browser that happens to be signed in
+    gets exactly what an anonymous client gets.  CSRF is therefore not checked:
+    the attack it defends against is a forged request spending a credential the
+    browser attaches automatically, and there is no such credential on this
+    path.
+
+    The owner's role is not resolved.  That costs a directory round trip and is
+    only needed once something is actually required of the token, so it is left
+    to :func:`require_scope` -- which means a read endpoint keeps working while
+    the directory is down.
+
+    A token that is presented and does not authenticate is refused outright,
+    even on an endpoint that would have served an anonymous caller.  Quietly
+    treating a dead token as anonymous would hand a CI job a 200 for a request
+    it believed was authenticated, and the first anyone would know of it is a
+    write failing much later.
+    """
+    request.state.identity = ANONYMOUS
+    request.state.token = None
+
+    presented = _bearer_token(request)
+    if presented is None:
+        return
+
+    record = await token_service.authenticate(session, presented)
+    if record is None:
+        log.info(
+            "api token rejected",
+            path=request.url.path,
+            client_ip=client_ip(request.scope),
+        )
+        raise ApiError(
+            status.HTTP_401_UNAUTHORIZED,
+            CREDENTIAL_REJECTED,
+            headers={"www-authenticate": WWW_AUTHENTICATE},
+        )
+
+    # Recorded in the caller's transaction, so a request that goes on to be
+    # refused does not update `last_used_at`.  That is the useful reading: the
+    # column answers "is this token still doing anything?", and a refused
+    # request is not the token working.  The refusal itself is logged above.
+    token_service.touch(record)
+    request.state.token = TokenIdentity.of(record)
+
+
 async def security_gate(
     request: Request, session: Annotated[AsyncSession, Depends(db_session)]
 ) -> None:
@@ -211,6 +374,10 @@ async def security_gate(
     database work at all: the session lookup is skipped when there is no cookie
     to look up.
     """
+    if is_api_request(request):
+        await _api_gate(request, session)
+        return
+
     settings = get_settings(request)
     now = utcnow()
     token = request.cookies.get(sessions.SESSION_COOKIE)
@@ -293,6 +460,12 @@ def identity_of(request: Request) -> Identity:
     return found
 
 
+def token_of(request: Request) -> TokenIdentity | None:
+    """The token :func:`_api_gate` accepted, or ``None`` for an anonymous call."""
+    found: TokenIdentity | None = getattr(request.state, "token", None)
+    return found
+
+
 # --------------------------------------------------------------------- the rules
 
 
@@ -346,3 +519,96 @@ async def require_authenticated(request: Request) -> Identity:
     if request.method in csrf.SAFE_METHODS:
         raise LoginRequired(str(request.url))
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sign in to continue.")
+
+
+# ------------------------------------------------------------------ token rules
+
+
+async def _owner_role(request: Request, identity: TokenIdentity) -> Role:
+    """The token owner's role in the directory right now (7.4).
+
+    Cached for the session revalidation interval; see
+    :mod:`repository_manager.auth.roles` for why that is the right interval and
+    what happens when the directory cannot be reached.
+    """
+    try:
+        return await get_role_cache(request).resolve(get_authenticator(request), identity.owner_dn)
+    except NoRoleAssignedError as exc:
+        log.info("api token owner has lost access", owner_dn=identity.owner_dn)
+        raise ApiError(
+            status.HTTP_403_FORBIDDEN,
+            "The account that owns this token is no longer a member of a group permitted "
+            "to make changes, so the token can no longer be used.",
+        ) from exc
+    except LdapError as exc:
+        raise ApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "The directory could not be reached, so this token's permissions could not be "
+            "confirmed. Retry shortly.",
+            headers={"retry-after": "30"},
+        ) from exc
+
+
+def require_scope(scope: TokenScope) -> Callable[[Request], Coroutine[Any, Any, TokenIdentity]]:
+    """A dependency admitting only a token that really carries ``scope`` (7.4, 8.2).
+
+    "Really" is three checks, and all three are here rather than spread across
+    the handlers so that a new endpoint cannot be written that forgets one: the
+    token must exist, the scope must survive intersection with the owner's
+    current role, and the repository in the path must be inside the token's
+    allow-list.
+
+    The repository check reads the ``slug`` path parameter directly.  That is
+    deliberate coupling: the alternative is each handler passing its own slug
+    in, which is exactly the kind of per-route obligation this module exists to
+    avoid.
+    """
+
+    async def gate(request: Request) -> TokenIdentity:
+        identity = token_of(request)
+        if identity is None:
+            raise ApiError(
+                status.HTTP_401_UNAUTHORIZED,
+                "This endpoint needs an API token. Send it as an Authorization: Bearer header.",
+                headers={"www-authenticate": WWW_AUTHENTICATE},
+            )
+
+        role = await _owner_role(request, identity)
+        effective = token_service.effective_scopes(identity.scopes, role)
+        if scope not in effective:
+            granted = ", ".join(sorted(identity.scopes)) or "none"
+            log.info(
+                "api scope refused",
+                token_id=identity.token_id,
+                owner_dn=identity.owner_dn,
+                required=scope.value,
+                role=role.value,
+                path=request.url.path,
+            )
+            raise ApiError(
+                status.HTTP_403_FORBIDDEN,
+                f"This needs the {scope.value} scope. This token carries {granted}, and its "
+                f"owner has the {role.label.lower()} role.",
+                required_scope=scope.value,
+            )
+
+        slug = request.path_params.get("slug")
+        if isinstance(slug, str) and not identity.covers(slug):
+            log.info(
+                "api repository scope refused",
+                token_id=identity.token_id,
+                owner_dn=identity.owner_dn,
+                slug=slug,
+            )
+            raise ApiError(
+                status.HTTP_403_FORBIDDEN,
+                f"This token is restricted to {', '.join(identity.repositories)} and may not "
+                f"act on {slug}.",
+            )
+        return identity
+
+    return gate
+
+
+#: The only write scope there is, pre-built so a route reads as the rule.
+require_write = require_scope(TokenScope.PACKAGE_WRITE)

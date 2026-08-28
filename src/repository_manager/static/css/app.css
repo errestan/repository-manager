@@ -642,3 +642,62 @@ button:hover {
 .outcome-denied {
   color: var(--text-muted);
 }
+
+/* ------------------------------------------------------------- API tokens */
+
+.checkbox-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  margin: 0.5rem 0;
+}
+
+.checkbox-option label {
+  font-weight: 400;
+}
+
+/* The hint sits under its own checkbox, aligned with the label rather than
+   the box, so a group of them reads as a list of choices. */
+.checkbox-option .field-hint {
+  grid-column: 2;
+  margin: 0;
+}
+
+/* A one-time secret, shown once and never again: given more weight than an
+   ordinary callout because missing it means minting another (7.4). */
+.callout-strong {
+  border: 2px solid var(--focus);
+  background: var(--info-bg);
+  border-radius: var(--radius);
+  padding: var(--space);
+  margin-bottom: var(--space);
+  max-width: var(--measure);
+}
+
+.callout-strong h2 {
+  margin-top: 0;
+}
+
+.token-secret {
+  display: inline-block;
+  /* The whole value has to be selectable and readable, and it is longer than
+     most viewports: wrapping anywhere is right for a string with no words. */
+  word-break: break-all;
+  padding: 0.4em 0.6em;
+  font-size: 1rem;
+}
+
+/* A revoke button lives in a table cell, so its form must not add a line. */
+.inline-form {
+  display: inline;
+  margin: 0;
+}
+
+/* "Anonymous" against "Token required" in the API reference: the pair is a
+   fact about the endpoint, not a status, so it stays quiet. */
+.badge-quiet {
+  background: var(--surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}

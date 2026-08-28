@@ -20,7 +20,7 @@ from starlette.routing import Mount
 
 from repository_manager.auth import csrf
 from repository_manager.models import Repository, Role
-from tests.conftest import PUBLIC_URL, browser, sign_in
+from tests.conftest import PUBLIC_URL, IssuedToken, browser, sign_in
 from tests.support import directory as fake_directory
 
 
@@ -30,6 +30,11 @@ class Endpoint:
     path: str
     #: ``None`` means anonymous: readable by anyone, unconditionally (AD-16).
     requires: Role | None
+    #: True for the REST API's write endpoints, which no browser session can
+    #: reach at all: they take a bearer token and nothing else (7.4).  Every
+    #: role is refused, including admin, so these are checked from the other
+    #: direction as well -- see `test_a_token_reaches_the_endpoints_it_is_for`.
+    token_only: bool = False
 
 
 ENDPOINTS = [
@@ -48,10 +53,24 @@ ENDPOINTS = [
     # already expired must still let the button work, rather than answering the
     # click with a permission error.
     Endpoint("POST", "/logout", None),
+    # -- the REST API's anonymous reads, matching the web interface (8.2)
+    Endpoint("GET", "/api/docs", None),
+    Endpoint("GET", "/api/v1/openapi.json", None),
+    Endpoint("GET", "/api/v1/repositories", None),
+    Endpoint("GET", "/api/v1/repositories/internal", None),
+    Endpoint("GET", "/api/v1/repositories/internal/packages", None),
+    # -- the REST API's token-only endpoints (7.4, 8.2)
+    Endpoint("GET", "/api/v1/jobs/1", None, token_only=True),
+    Endpoint("POST", "/api/v1/repositories/internal/packages", None, token_only=True),
+    Endpoint("DELETE", "/api/v1/repositories/internal/packages/1", None, token_only=True),
+    Endpoint("POST", "/api/v1/repositories/internal/regenerate", None, token_only=True),
     # -- any signed-in user
     Endpoint("GET", "/jobs", Role.MAINTAINER),
     Endpoint("GET", "/jobs/1", Role.MAINTAINER),
     Endpoint("GET", "/audit", Role.MAINTAINER),
+    Endpoint("GET", "/tokens", Role.MAINTAINER),
+    Endpoint("POST", "/tokens", Role.MAINTAINER),
+    Endpoint("POST", "/tokens/1/revoke", Role.MAINTAINER),
     # -- maintainer: package operations
     Endpoint("GET", "/repositories/internal/packages/upload", Role.MAINTAINER),
     Endpoint("POST", "/repositories/internal/packages/upload", Role.MAINTAINER),
@@ -83,13 +102,23 @@ def allowed(response: object) -> bool:
     exist, a 400 for an empty form and a 303 after a successful post all mean
     the request reached its handler, which is what these tests are about.
 
-    A refusal is a 403, or a 303 to the login form -- sending someone who is not
-    signed in to type a password is more use than telling them they may not.
-    The destination is what separates that redirect from a successful one.
+    A refusal is a 403; a 401 that asks for a credential; or a 303 to the login
+    form -- sending someone who is not signed in to type a password is more use
+    than telling them they may not, and the destination is what separates that
+    redirect from a successful one.
+
+    The 401 has to be qualified.  ``POST /login`` answers 401 for a password
+    that was wrong, which means the request reached its handler and was
+    answered; the API answers 401 with ``WWW-Authenticate`` because it wants a
+    credential it did not get.  Only the second is the permission layer saying
+    no.
     """
     status = getattr(response, "status_code", 0)
+    headers = getattr(response, "headers", {})
     if status == 403:
         return False
+    if status == 401:
+        return "www-authenticate" not in headers
     if status == 303:
         return "/login" not in str(getattr(response, "headers", {}).get("location", ""))
     return True
@@ -106,7 +135,8 @@ def test_anonymous_access_matches_the_matrix(
     signed_out: TestClient, apt_repository: Repository, endpoint: Endpoint
 ) -> None:
     response = signed_out.request(endpoint.method, endpoint.path, follow_redirects=False)
-    assert allowed(response) is (endpoint.requires is None), response.status_code
+    expected = endpoint.requires is None and not endpoint.token_only
+    assert allowed(response) is expected, response.status_code
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS, ids=ids(ENDPOINTS))
@@ -114,7 +144,7 @@ def test_maintainer_access_matches_the_matrix(
     maintainer_client: TestClient, apt_repository: Repository, endpoint: Endpoint
 ) -> None:
     response = maintainer_client.request(endpoint.method, endpoint.path, follow_redirects=False)
-    expected = endpoint.requires is not Role.ADMIN
+    expected = endpoint.requires is not Role.ADMIN and not endpoint.token_only
     assert allowed(response) is expected, response.status_code
 
 
@@ -122,7 +152,30 @@ def test_maintainer_access_matches_the_matrix(
 def test_admin_access_matches_the_matrix(
     admin_client: TestClient, apt_repository: Repository, endpoint: Endpoint
 ) -> None:
+    """An admin reaches everything -- except the API's token-only endpoints.
+
+    That exception is the point of the ``token_only`` column: being an
+    administrator in a browser is not a way into an interface that takes bearer
+    tokens, because the session cookie is never read there (7.4).
+    """
     response = admin_client.request(endpoint.method, endpoint.path, follow_redirects=False)
+    assert allowed(response) is not endpoint.token_only, response.status_code
+
+
+TOKEN_ONLY = [endpoint for endpoint in ENDPOINTS if endpoint.token_only]
+
+
+@pytest.mark.parametrize("endpoint", TOKEN_ONLY, ids=ids(TOKEN_ONLY))
+def test_a_token_reaches_the_endpoints_it_is_for(
+    manageable_app: FastAPI,
+    apt_repository: Repository,
+    write_token: IssuedToken,
+    endpoint: Endpoint,
+) -> None:
+    """The other half of the token_only rows: refused for sessions, admitted here."""
+    with browser(manageable_app) as client:
+        client.headers.update(write_token.header)
+        response = client.request(endpoint.method, endpoint.path, follow_redirects=False)
     assert allowed(response), response.status_code
 
 
@@ -185,7 +238,11 @@ def _shape(path: str) -> str:
         "/repositories/internal": "/repositories/{slug}",
         "/keys/test-key": "/keys/{name}",
         "/packages/1/delete": "/packages/{publication_id}/delete",
+        "/api/v1/repositories/{slug}/packages/1": (
+            "/api/v1/repositories/{slug}/packages/{publication_id}"
+        ),
         "/jobs/1": "/jobs/{job_id}",
+        "/tokens/1/revoke": "/tokens/{token_id}/revoke",
     }
     for concrete, template in replacements.items():
         path = path.replace(concrete, template)

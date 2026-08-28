@@ -36,13 +36,26 @@ from repository_manager.models.repository import (
     Repository,
     RpmVariant,
 )
+from repository_manager.models.token import (
+    TOKEN_BYTES,
+    TOKEN_PREFIX,
+    TOKEN_PREFIX_LENGTH,
+    ApiToken,
+    TokenScope,
+    decode_scopes,
+    encode_scopes,
+)
 
 __all__ = [
     "FINGERPRINT_PATTERN",
     "KEY_NAME_PATTERN",
     "NAME_PATTERN",
     "SLUG_PATTERN",
+    "TOKEN_BYTES",
+    "TOKEN_PREFIX",
+    "TOKEN_PREFIX_LENGTH",
     "ActorType",
+    "ApiToken",
     "AptArchitecture",
     "AptComponent",
     "AptDistribution",
@@ -61,8 +74,11 @@ __all__ = [
     "Role",
     "RpmVariant",
     "SigningKey",
+    "TokenScope",
     "UploadSource",
     "UserSession",
     "UtcDateTime",
+    "decode_scopes",
+    "encode_scopes",
     "utcnow",
 ]

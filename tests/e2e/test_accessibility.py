@@ -353,3 +353,46 @@ def test_every_management_input_has_a_label(signed_in: Page, management_pages: l
             assert (
                 signed_in.locator(f'label[for="{identifier}"], legend#{identifier}').count() >= 1
             ), f"no label for #{identifier} on {url}"
+
+
+def test_a_new_token_is_announced_where_it_can_be_read(signed_in: Page, live_server: str) -> None:
+    """The secret exists once, so the region carrying it interrupts (11).
+
+    role="alert" rather than "status": a confirmation that is merely polite can
+    be missed, and this one cannot be recovered if it is.
+    """
+    signed_in.goto(f"{live_server}/tokens")
+    signed_in.fill("#field-label", "release pipeline")
+    signed_in.check("#field-scopes-1")
+    # By name, not `button[type=submit]`: the theme switch in the header is the
+    # first submit button on every page.
+    signed_in.get_by_role("button", name="Create token").click()
+
+    alert = signed_in.locator('[role="alert"]#new-token')
+    expect(alert).to_be_visible()
+    expect(alert.locator("code.token-secret")).to_contain_text("rmt_")
+
+
+def test_the_token_is_not_shown_a_second_time(signed_in: Page, live_server: str) -> None:
+    signed_in.goto(f"{live_server}/tokens")
+    signed_in.fill("#field-label", "release pipeline")
+    signed_in.check("#field-scopes-1")
+    signed_in.get_by_role("button", name="Create token").click()
+    secret = signed_in.locator("code.token-secret").inner_text()
+
+    signed_in.goto(f"{live_server}/tokens")
+    assert secret not in signed_in.content()
+
+
+def test_the_api_reference_needs_no_remote_assets(page: Page, live_server: str) -> None:
+    """The CSP allows no remote origins, so a CDN-backed docs page would be blank."""
+    external: list[str] = []
+    page.on(
+        "request",
+        lambda request: (
+            external.append(request.url) if not request.url.startswith(live_server) else None
+        ),
+    )
+    page.goto(f"{live_server}/api/docs")
+    expect(page.locator("h1")).to_have_text("REST API")
+    assert not external, external

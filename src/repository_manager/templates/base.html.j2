@@ -27,6 +27,12 @@
               <a href="{{ url_for('key_list') }}"
                  {% if current_path == url_for('key_list').path %}aria-current="page"{% endif %}>Keys</a>
             </li>
+            {% if api_docs %}
+              <li>
+                <a href="{{ url_for('api_reference') }}"
+                   {% if current_path == url_for('api_reference').path %}aria-current="page"{% endif %}>API</a>
+              </li>
+            {% endif %}
             {% if identity.authenticated %}
               <li>
                 <a href="{{ url_for('job_list') }}"
@@ -35,6 +41,10 @@
               <li>
                 <a href="{{ url_for('audit_log') }}"
                    {% if current_path == url_for('audit_log').path %}aria-current="page"{% endif %}>Audit</a>
+              </li>
+              <li>
+                <a href="{{ url_for('token_list') }}"
+                   {% if current_path == url_for('token_list').path %}aria-current="page"{% endif %}>Tokens</a>
               </li>
             {% endif %}
           </ul>

@@ -58,7 +58,9 @@ class ProxyHeadersMiddleware:
     The middleware also normalises the mount prefix: whether the proxy strips
     the prefix and announces it via ``X-Forwarded-Prefix`` or passes the whole
     path through untouched, the application downstream always sees
-    ``root_path`` set to the prefix and ``path`` without it.
+    ``root_path`` set to the prefix and ``path`` still containing it -- which is
+    the shape Starlette's own routing expects.  :func:`route_path` is the way
+    back to the path without it.
     """
 
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
@@ -169,11 +171,16 @@ class RequestContextMiddleware:
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             # Health probes would otherwise dominate the log at one line per
             # second; they are still counted by metrics.
-            if scope.get("path") not in {"/healthz", "/readyz"}:
+            # Compared against the routed path, so a sub-path deployment does
+            # not start logging one line a second per probe (13.5).
+            if route_path(scope) not in {"/healthz", "/readyz"}:
                 log.info(
                     "request",
                     method=scope.get("method"),
-                    path=scope.get("root_path", "") + scope.get("path", ""),
+                    # `path` already carries the prefix -- ProxyHeadersMiddleware
+                    # puts it back when the proxy stripped it -- so this is the
+                    # externally visible path, not a fragment of one.
+                    path=scope.get("path", ""),
                     status=status_code,
                     duration_ms=duration_ms,
                     client_ip=scope.get("client_ip"),
@@ -233,6 +240,24 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_wrapper)
+
+
+def route_path(scope: Scope) -> str:
+    """The request path with the mount prefix removed (13.5).
+
+    :meth:`ProxyHeadersMiddleware._apply_prefix` guarantees that ``path``
+    contains the prefix and that ``root_path`` *is* the prefix, so this is the
+    path the router matched against -- the same value Starlette computes
+    internally to dispatch the request.  Written out here rather than imported
+    from Starlette because that helper is not part of its public surface, and a
+    security decision (:func:`repository_manager.web.deps.is_api_request`) is
+    made on the answer.
+    """
+    path = str(scope.get("path", ""))
+    prefix = str(scope.get("root_path", ""))
+    if prefix and path.startswith(prefix):
+        return path[len(prefix) :] or "/"
+    return path
 
 
 def client_ip(scope: Scope | Any) -> str | None:
