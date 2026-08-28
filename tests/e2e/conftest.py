@@ -323,6 +323,8 @@ def management_pages(live_server: str) -> list[str]:
     return [
         f"{live_server}/repositories/internal/packages/upload",
         f"{live_server}/repositories/internal/distributions",
+        f"{live_server}/repositories/el9/packages/upload",
+        f"{live_server}/repositories/el9/variants",
         f"{live_server}/repositories/new",
         f"{live_server}/jobs",
         f"{live_server}/jobs/1",

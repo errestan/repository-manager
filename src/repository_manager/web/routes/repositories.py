@@ -12,6 +12,7 @@ Route order matters: ``/repositories/new`` is declared before
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -24,6 +25,8 @@ from starlette.responses import RedirectResponse, Response
 
 from repository_manager.config import Settings
 from repository_manager.jobs.queue import JobQueue
+from repository_manager.metadata.repodata import public_key_filename
+from repository_manager.metadata.rpm import ARCH_NOARCH
 from repository_manager.models import (
     AptComponent,
     AptDistribution,
@@ -33,16 +36,18 @@ from repository_manager.models import (
     PackagePublication,
     Repository,
     RepositoryType,
+    RpmVariant,
     SigningKey,
 )
 from repository_manager.security.paths import resolve_within_roots
 from repository_manager.services import audit, publishing
 from repository_manager.services import packages as package_service
 from repository_manager.services import repositories as repository_service
-from repository_manager.services.packages import UploadError
+from repository_manager.services.packages import ARCH_ALL, UploadError
 from repository_manager.services.repositories import (
     DistributionSpec,
     RepositoryServiceError,
+    VariantSpec,
     parse_name_list,
 )
 from repository_manager.web.deps import (
@@ -64,6 +69,24 @@ router = APIRouter(tags=["repositories"])
 
 PACKAGES_PER_PAGE = 50
 UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+#: What the upload form accepts, and how the package file is described, per
+#: format.  Kept here rather than in the template so the two never disagree.
+#: Where each ecosystem expects a repository's public key to be installed.
+APT_KEYRING_DIR = "/usr/share/keyrings"
+RPM_KEYRING_DIR = "/etc/pki/rpm-gpg"
+
+UPLOAD_HINTS: dict[RepositoryType, tuple[str, str]] = {
+    RepositoryType.APT: (
+        ".deb,application/vnd.debian.binary-package",
+        "A .deb file. Its architecture must be one this distribution publishes, or 'all'.",
+    ),
+    RepositoryType.RPM: (
+        ".rpm,application/x-rpm",
+        "A binary .rpm file. Its architecture must match the variant, or be 'noarch'. "
+        "Source packages (.src.rpm) are not accepted.",
+    ),
+}
 
 _PUBLICATION_LOADS = (
     selectinload(Repository.distributions).selectinload(AptDistribution.components),
@@ -115,26 +138,76 @@ async def _package_count(session: AsyncSession, repository: Repository) -> int:
     return int(total or 0)
 
 
-def _client_snippet(settings: Settings, repository: Repository) -> str | None:
-    """The `sources.list` line for this repository (4.4).
+def _apt_snippet(settings: Settings, repository: Repository, key_name: str) -> str:
+    base = settings.repository_url(repository.slug)
+    return "\n".join(
+        f"deb [signed-by={APT_KEYRING_DIR}/{key_name}.asc] "
+        f"{base} {distribution.codename} "
+        + " ".join(component.name for component in distribution.components)
+        for distribution in repository.distributions
+    )
 
-    Returns nothing without a signing key: apt refuses an unverifiable
-    repository, so a snippet naming a keyring file that will never exist would
-    only send someone down a dead end.
+
+def _rpm_snippet(settings: Settings, repository: Repository, key_name: str) -> str:
+    """One ``.repo`` section per variant (4.4).
+
+    ``gpgcheck`` and ``repo_gpgcheck`` are both on.  They are different checks:
+    the first verifies each package's own signature, the second verifies
+    ``repomd.xml``, and only the second is one this application can promise --
+    so the snippet turning both on is a statement about how the repository
+    should be *consumed*, not about what has already been guaranteed.
     """
-    if repository.type is not RepositoryType.APT or not repository.distributions:
-        return None
+    base = settings.repository_url(repository.slug)
+    sections = []
+    for variant in repository.variants:
+        path = f"{variant.name}/{variant.arch}"
+        sections.append(
+            "\n".join(
+                [
+                    f"[{repository.slug}-{variant.name}-{variant.arch}]",
+                    f"name={repository.name} — {path}",
+                    f"baseurl={base}/{path}",
+                    "enabled=1",
+                    "gpgcheck=1",
+                    "repo_gpgcheck=1",
+                    f"gpgkey=file://{RPM_KEYRING_DIR}/{public_key_filename(key_name)}",
+                ]
+            )
+        )
+    return "\n\n".join(sections)
+
+
+def _client_snippet(settings: Settings, repository: Repository) -> str | None:
+    """The client setup snippet for this repository (4.4).
+
+    Returns nothing without a signing key: both apt and dnf refuse an
+    unverifiable repository, so a snippet naming a key file that will never
+    exist would only send someone down a dead end.
+    """
     if repository.signing_key is None:
         return None
     key_name = repository.signing_key.name
-    lines = []
-    for distribution in repository.distributions:
-        components = " ".join(component.name for component in distribution.components)
-        lines.append(
-            f"deb [signed-by=/usr/share/keyrings/{key_name}.asc] "
-            f"{settings.repository_url(repository.slug)} {distribution.codename} {components}"
-        )
-    return "\n".join(lines)
+    if repository.type is RepositoryType.APT:
+        if not repository.distributions:
+            return None
+        return _apt_snippet(settings, repository, key_name)
+    if not repository.variants:
+        return None
+    return _rpm_snippet(settings, repository, key_name)
+
+
+def _key_install(repository: Repository) -> dict[str, str] | None:
+    """Where a client is told to put the public key, and what to call it.
+
+    The two ecosystems disagree on both, and getting either wrong produces a
+    repository that looks configured and refuses to refresh.
+    """
+    if repository.signing_key is None:
+        return None
+    name = repository.signing_key.name
+    if repository.type is RepositoryType.APT:
+        return {"directory": APT_KEYRING_DIR, "filename": f"{name}.asc"}
+    return {"directory": RPM_KEYRING_DIR, "filename": public_key_filename(name)}
 
 
 # --------------------------------------------------------------------------- browsing
@@ -181,7 +254,14 @@ async def _signing_keys(session: AsyncSession) -> list[SigningKey]:
 async def repository_new(
     request: Request, session: Annotated[AsyncSession, Depends(db_session)]
 ) -> Response:
-    form = FormState(values={"retention": "all", "components": "main", "architectures": "amd64"})
+    form = FormState(
+        values={
+            "retention": "all",
+            "components": "main",
+            "architectures": "amd64",
+            "variant_arch": "x86_64",
+        }
+    )
     return render(
         get_templates(request),
         request,
@@ -207,6 +287,21 @@ def _retention(form: FormState, choice: str, count: str) -> int:
     return value
 
 
+def _repository_format(form: FormState, raw: str) -> RepositoryType | None:
+    """The format is a required choice, like retention (4.3).
+
+    No default is applied.  The two formats produce entirely different trees
+    and cannot be converted into one another afterwards, so guessing on the
+    user's behalf would be guessing about the one decision that cannot be
+    undone.
+    """
+    try:
+        return RepositoryType(raw)
+    except ValueError:
+        form.add("format", "Choose whether this repository serves APT or RPM packages.")
+        return None
+
+
 @router.post(
     "/repositories/new",
     include_in_schema=False,
@@ -222,14 +317,18 @@ async def repository_create(
     signing_key_id: Annotated[str, Form()] = "",
     retention: Annotated[str, Form()] = "",
     retention_count: Annotated[str, Form()] = "",
+    repository_format: Annotated[str, Form(alias="format")] = "",
     codename: Annotated[str, Form()] = "",
     suite: Annotated[str, Form()] = "",
     components: Annotated[str, Form()] = "",
     architectures: Annotated[str, Form()] = "",
+    variant_name: Annotated[str, Form()] = "",
+    variant_arch: Annotated[str, Form()] = "",
     origin: Annotated[str, Form()] = "",
     label: Annotated[str, Form()] = "",
 ) -> Response:
     settings = get_settings(request)
+    available_keys = await _signing_keys(session)
     form = FormState(
         values={
             "name": name,
@@ -238,26 +337,50 @@ async def repository_create(
             "signing_key_id": signing_key_id,
             "retention": retention,
             "retention_count": retention_count,
+            "format": repository_format,
             "codename": codename,
             "suite": suite,
             "components": components,
             "architectures": architectures,
+            "variant_name": variant_name,
+            "variant_arch": variant_arch,
             "origin": origin,
             "label": label,
         }
     )
 
+    def rejected() -> Response:
+        return render(
+            get_templates(request),
+            request,
+            "repositories/new.html.j2",
+            _creation_context(request, available_keys, form),
+            status_code=400,
+        )
+
     clean_name = required(form, "name", name, "Repository name")
     clean_root = required(form, "root_path", root_path, "Root path")
-    clean_codename = required(form, "codename", codename, "Distribution codename")
-    component_names = parse_name_list(components)
-    architecture_names = parse_name_list(architectures)
-    if not component_names:
-        form.add("components", "Name at least one component, for example 'main'.")
-    if not architecture_names:
-        form.add("architectures", "Name at least one architecture, for example 'amd64'.")
-
     keep = _retention(form, retention, retention_count)
+    chosen = _repository_format(form, repository_format)
+
+    # Only the chosen format's fields are validated.  The form shows both
+    # subdivisions because it has to work without JavaScript (11), so whatever
+    # sits in the other one is not an error -- it is a field the user correctly
+    # ignored.
+    component_names: tuple[str, ...] = ()
+    architecture_names: tuple[str, ...] = ()
+    clean_codename = ""
+    if chosen is RepositoryType.APT:
+        clean_codename = required(form, "codename", codename, "Distribution codename")
+        component_names = parse_name_list(components)
+        architecture_names = parse_name_list(architectures)
+        if not component_names:
+            form.add("components", "Name at least one component, for example 'main'.")
+        if not architecture_names:
+            form.add("architectures", "Name at least one architecture, for example 'amd64'.")
+    elif chosen is RepositoryType.RPM:
+        required(form, "variant_name", variant_name, "Variant name")
+        required(form, "variant_arch", variant_arch, "Variant architecture")
 
     key_id = 0
     if not signing_key_id:
@@ -269,44 +392,45 @@ async def repository_create(
             form.add("signing_key_id", "That signing key is not valid.")
 
     if not form.ok:
-        return render(
-            get_templates(request),
-            request,
-            "repositories/new.html.j2",
-            _creation_context(request, await _signing_keys(session), form),
-            status_code=400,
-        )
+        return rejected()
 
     try:
-        repository = await repository_service.create_apt_repository(
-            session,
-            settings,
-            name=clean_name,
-            root_path=clean_root,
-            description=description,
-            signing_key_id=key_id,
-            retention_count=keep,
-            origin=origin,
-            label=label,
-            actor=identity.user_dn,
-            distributions=(
-                DistributionSpec(
-                    codename=clean_codename,
-                    suite=suite.strip() or None,
-                    components=component_names,
-                    architectures=architecture_names,
+        if chosen is RepositoryType.APT:
+            repository = await repository_service.create_apt_repository(
+                session,
+                settings,
+                name=clean_name,
+                root_path=clean_root,
+                description=description,
+                signing_key_id=key_id,
+                retention_count=keep,
+                origin=origin,
+                label=label,
+                actor=identity.user_dn,
+                distributions=(
+                    DistributionSpec(
+                        codename=clean_codename,
+                        suite=suite.strip() or None,
+                        components=component_names,
+                        architectures=architecture_names,
+                    ),
                 ),
-            ),
-        )
+            )
+        else:
+            repository = await repository_service.create_rpm_repository(
+                session,
+                settings,
+                name=clean_name,
+                root_path=clean_root,
+                description=description,
+                signing_key_id=key_id,
+                retention_count=keep,
+                actor=identity.user_dn,
+                variants=(VariantSpec(name=variant_name.strip(), arch=variant_arch.strip()),),
+            )
     except (RepositoryServiceError, ValueError) as exc:
         form.add("root_path", str(exc))
-        return render(
-            get_templates(request),
-            request,
-            "repositories/new.html.j2",
-            _creation_context(request, await _signing_keys(session), form),
-            status_code=400,
-        )
+        return rejected()
 
     await audit.record(
         session,
@@ -315,7 +439,11 @@ async def repository_create(
         repository_id=repository.id,
         target=repository.slug,
         source_ip=client_ip(request.scope),
-        details={"name": repository.name, "root_path": repository.root_path},
+        details={
+            "name": repository.name,
+            "type": repository.type.value,
+            "root_path": repository.root_path,
+        },
     )
     return RedirectResponse(
         request.url_for("repository_detail", slug=repository.slug),
@@ -356,6 +484,7 @@ async def repository_detail(
             # must be absolute and built from the external URL (13.5, 4.4).
             "base_url": settings.repository_url(repository.slug),
             "client_snippet": _client_snippet(settings, repository),
+            "key_install": _key_install(repository),
         },
     )
 
@@ -364,13 +493,19 @@ async def repository_detail(
 
 
 def _filtered(repository: Repository, query: str, architecture: str) -> Select[Any]:
-    statement = (
-        select(PackagePublication)
-        .join(Package, Package.id == PackagePublication.package_id)
-        .join(AptComponent, AptComponent.id == PackagePublication.component_id)
-        .join(AptDistribution, AptDistribution.id == AptComponent.distribution_id)
-        .where(Package.repository_id == repository.id)
+    statement = select(PackagePublication).join(
+        Package, Package.id == PackagePublication.package_id
     )
+    # Joined through the target table rather than filtered on `Package` alone,
+    # so a publication whose target belongs to another repository can never
+    # appear here even if the two share a package row.
+    if repository.type is RepositoryType.APT:
+        statement = statement.join(
+            AptComponent, AptComponent.id == PackagePublication.component_id
+        ).join(AptDistribution, AptDistribution.id == AptComponent.distribution_id)
+    else:
+        statement = statement.join(RpmVariant, RpmVariant.id == PackagePublication.variant_id)
+    statement = statement.where(Package.repository_id == repository.id)
     if query:
         # Escaped so a user searching for "lib_" does not get every three-letter
         # package name back.  Built by concatenation because an f-string may not
@@ -402,20 +537,13 @@ async def repository_packages(
         base.options(
             selectinload(PackagePublication.package),
             selectinload(PackagePublication.component).selectinload(AptComponent.distribution),
+            selectinload(PackagePublication.variant),
         )
         .order_by(Package.name, Package.version, Package.architecture)
         .offset((page - 1) * PACKAGES_PER_PAGE)
         .limit(PACKAGES_PER_PAGE)
     )
     publications = list((await session.execute(listing)).scalars().all())
-
-    architectures = sorted(
-        {
-            architecture.name
-            for distribution in repository.distributions
-            for architecture in distribution.architectures
-        }
-    )
     pages = max(1, -(-total // PACKAGES_PER_PAGE))
     return render(
         get_templates(request),
@@ -429,40 +557,102 @@ async def repository_packages(
             "pages": pages,
             "query": query,
             "architecture": architecture,
-            "architectures": architectures,
+            "architectures": _architecture_options(repository),
+            # The spelling of "runs anywhere" differs by format, and the filter
+            # offers it explicitly because no package's own header ever names
+            # the other one.
+            "any_architecture": ARCH_ALL if repository.type is RepositoryType.APT else ARCH_NOARCH,
         },
     )
 
 
+def _architecture_options(repository: Repository) -> list[str]:
+    """The architectures this repository publishes, for the filter.
+
+    The format's own "runs anywhere" name is left out and offered separately by
+    the template: an APT distribution may well list ``all`` among its
+    architectures, and it would otherwise appear in the list twice.
+    """
+    if repository.type is RepositoryType.APT:
+        found = {
+            architecture.name
+            for distribution in repository.distributions
+            for architecture in distribution.architectures
+        }
+        return sorted(found - {ARCH_ALL})
+    return sorted({variant.arch for variant in repository.variants} - {ARCH_NOARCH})
+
+
+@dataclass(frozen=True)
+class AptTarget:
+    """A resolved ``distribution/component`` to publish a ``.deb`` into."""
+
+    distribution: AptDistribution
+    component: AptComponent
+
+    @property
+    def label(self) -> str:
+        return f"{self.distribution.codename}/{self.component.name}"
+
+
+@dataclass(frozen=True)
+class RpmTarget:
+    """A resolved variant to publish an ``.rpm`` into."""
+
+    variant: RpmVariant
+
+    @property
+    def label(self) -> str:
+        return f"{self.variant.name}/{self.variant.arch}"
+
+
+#: Two shapes rather than one with optional halves, so the upload route branches
+#: on a type the checker can narrow instead of on a field that might be unset.
+UploadTarget = AptTarget | RpmTarget
+
+
 def _targets(repository: Repository) -> list[tuple[int, str]]:
-    """Selectable (component id, label) pairs, flattened across distributions.
+    """Selectable (id, label) pairs for the publication targets.
 
     One flat select rather than two dependent ones: a distribution/component
     pair of selects only works if JavaScript repopulates the second, and every
     flow has to work without it (11).
+
+    The ids come from different tables for the two formats and are only ever
+    resolved against the repository they were rendered for, which is what stops
+    a component id from being read as a variant id.
     """
-    return [
-        (component.id, f"{distribution.codename} / {component.name}")
-        for distribution in repository.distributions
-        for component in distribution.components
-    ]
+    if repository.type is RepositoryType.APT:
+        return [
+            (component.id, f"{distribution.codename} / {component.name}")
+            for distribution in repository.distributions
+            for component in distribution.components
+        ]
+    return [(variant.id, f"{variant.name}/{variant.arch}") for variant in repository.variants]
 
 
-def _find_component(
-    repository: Repository, component_id: int
-) -> tuple[AptDistribution, AptComponent]:
-    for distribution in repository.distributions:
-        for component in distribution.components:
-            if component.id == component_id:
-                return distribution, component
-    raise UploadError("Choose a distribution and component to publish into.", status_code=400)
+def _find_target(repository: Repository, target_id: int) -> UploadTarget:
+    if repository.type is RepositoryType.APT:
+        for distribution in repository.distributions:
+            for component in distribution.components:
+                if component.id == target_id:
+                    return AptTarget(distribution=distribution, component=component)
+        raise UploadError("Choose a distribution and component to publish into.", status_code=400)
+
+    for variant in repository.variants:
+        if variant.id == target_id:
+            return RpmTarget(variant=variant)
+    raise UploadError("Choose a variant to publish into.", status_code=400)
 
 
 def _upload_context(request: Request, repository: Repository, form: FormState) -> dict[str, Any]:
+    accept, hint = UPLOAD_HINTS[repository.type]
     return {
         "repository": repository,
         "form": form,
         "targets": _targets(repository),
+        "accept": accept,
+        "package_hint": hint,
     }
 
 
@@ -539,11 +729,12 @@ async def repository_upload(
             upload = submitted.get("package")
 
             if not isinstance(upload, UploadFile) or not upload.filename:
-                return reject("Choose a .deb file to upload.")
+                suffix = ".deb" if repository.type is RepositoryType.APT else ".rpm"
+                return reject(f"Choose a {suffix} file to upload.")
             try:
-                distribution, component = _find_component(repository, int(raw_target or 0))
+                target = _find_target(repository, int(raw_target or 0))
             except ValueError:
-                return reject("Choose a distribution and component.", "target")
+                return reject("Choose somewhere to publish this package.", "target")
             except UploadError as exc:
                 return reject(str(exc), "target")
 
@@ -558,15 +749,25 @@ async def repository_upload(
         return reject(str(exc), code=exc.status_code)
 
     try:
-        outcome = await package_service.publish_deb(
-            session,
-            settings,
-            repository=repository,
-            distribution=distribution,
-            component=component,
-            staged=staged,
-            actor=identity.user_dn,
-        )
+        if isinstance(target, AptTarget):
+            outcome = await package_service.publish_deb(
+                session,
+                settings,
+                repository=repository,
+                distribution=target.distribution,
+                component=target.component,
+                staged=staged,
+                actor=identity.user_dn,
+            )
+        else:
+            outcome = await package_service.publish_rpm(
+                session,
+                settings,
+                repository=repository,
+                variant=target.variant,
+                staged=staged,
+                actor=identity.user_dn,
+            )
     except UploadError as exc:
         return reject(str(exc), code=exc.status_code)
 
@@ -579,10 +780,9 @@ async def repository_upload(
         source_ip=client_ip(request.scope),
         details={
             "name": outcome.package.name,
-            "version": outcome.package.version,
+            "version": outcome.package.full_version,
             "architecture": outcome.package.architecture,
-            "distribution": distribution.codename,
-            "component": component.name,
+            "published_in": target.label,
             # False means the identical file was already published here, which
             # is a successful no-op rather than a new package (5.1).
             "created": outcome.created,
@@ -691,6 +891,10 @@ async def repository_distributions(
     request: Request, slug: str, session: Annotated[AsyncSession, Depends(db_session)]
 ) -> Response:
     repository = await _load(session, slug)
+    if repository.type is not RepositoryType.APT:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="That repository has no distributions"
+        )
     return render(
         get_templates(request),
         request,
@@ -776,5 +980,89 @@ async def repository_distribution_add(
     queue.wake()
     return RedirectResponse(
         request.url_for("repository_distributions", slug=repository.slug),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.get(
+    "/repositories/{slug}/variants",
+    include_in_schema=False,
+    name="repository_variants",
+    dependencies=[Depends(require_admin)],
+)
+async def repository_variants(
+    request: Request, slug: str, session: Annotated[AsyncSession, Depends(db_session)]
+) -> Response:
+    repository = await _load(session, slug)
+    if repository.type is not RepositoryType.RPM:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="That repository has no variants"
+        )
+    return render(
+        get_templates(request),
+        request,
+        "repositories/variants.html.j2",
+        {"repository": repository, "form": FormState(values={"variant_arch": "x86_64"})},
+    )
+
+
+@router.post(
+    "/repositories/{slug}/variants",
+    include_in_schema=False,
+    name="repository_variant_add",
+)
+async def repository_variant_add(
+    request: Request,
+    slug: str,
+    session: Annotated[AsyncSession, Depends(db_session)],
+    queue: Annotated[JobQueue, Depends(get_queue)],
+    identity: Annotated[Identity, Depends(require_admin)],
+    variant_name: Annotated[str, Form()] = "",
+    variant_arch: Annotated[str, Form()] = "",
+) -> Response:
+    repository = await _load(session, slug)
+    if repository.type is not RepositoryType.RPM:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="That repository has no variants"
+        )
+
+    form = FormState(values={"variant_name": variant_name, "variant_arch": variant_arch})
+    clean_name = required(form, "variant_name", variant_name, "Variant name")
+    clean_arch = required(form, "variant_arch", variant_arch, "Variant architecture")
+
+    if form.ok:
+        try:
+            await repository_service.add_variant(
+                session, repository, VariantSpec(name=clean_name, arch=clean_arch)
+            )
+        except (RepositoryServiceError, ValueError) as exc:
+            form.add("variant_name", str(exc))
+
+    if not form.ok:
+        return render(
+            get_templates(request),
+            request,
+            "repositories/variants.html.j2",
+            {"repository": repository, "form": form},
+            status_code=400,
+        )
+
+    await audit.record(
+        session,
+        action=AuditAction.VARIANT_ADD,
+        actor=identity.user_dn,
+        repository_id=repository.id,
+        target=f"{clean_name}/{clean_arch}",
+        source_ip=client_ip(request.scope),
+        details={"variant": clean_name, "architecture": clean_arch},
+    )
+    # Queued rather than written here: the new tree has no repodata at all
+    # until it runs, and a variant clients cannot refresh is worse than one
+    # that appears a few seconds late (5.4).
+    await publishing.request_regeneration(session, queue, repository, actor=identity.user_dn)
+    await session.commit()
+    queue.wake()
+    return RedirectResponse(
+        request.url_for("repository_variants", slug=repository.slug),
         status_code=status.HTTP_303_SEE_OTHER,
     )

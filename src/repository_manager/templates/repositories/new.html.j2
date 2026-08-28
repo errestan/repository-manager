@@ -4,7 +4,7 @@
   {% if form.errors %}Error: {% endif %}New repository — Repository Manager
 {% endblock %}
 {% block description %}
-  Create an APT repository and publish its first, empty, signed metadata.
+  Create an APT or RPM repository and publish its first, empty, signed metadata.
 {% endblock %}
 {% block content %}
   <nav aria-label="Breadcrumb" class="breadcrumb">
@@ -15,7 +15,7 @@
       <li aria-current="page">New repository</li>
     </ol>
   </nav>
-  <h1>New APT repository</h1>
+  <h1>New repository</h1>
   {{ error_summary(form) }}
   {% if not keys %}
     <div class="callout" role="alert">
@@ -27,7 +27,7 @@
   {% else %}
     <p class="lede">
       The repository's directory tree, its first empty index and its signature are all created
-      now, so clients can add it and run <code>apt update</code> immediately.
+      now, so clients can add it and refresh immediately.
     </p>
     <form method="post"
           action="{{ url_for('repository_create') }}"
@@ -40,6 +40,10 @@
         hint='Optional. What this repository is for.') }}
       {{ text_field(form, 'root_path', 'Root path', required=True,
         hint='An absolute path inside a configured allowed root. It must be empty or not yet exist.') }}
+      <h2>Format</h2>
+      {{ radio_group(form, 'format', 'Which kind of packages will this repository publish?',
+        [('apt', 'APT — Debian and Ubuntu (.deb)'), ('rpm', 'RPM — Fedora, RHEL and SUSE (.rpm)')],
+        hint='This cannot be changed later: the two formats produce entirely different trees.') }}
       <h2>Signing</h2>
       {{ select_field(form, 'signing_key_id', 'Signing key', key_options,
         required=True, empty_label='Choose a key…',
@@ -50,16 +54,39 @@
         hint='There is deliberately no default: unbounded growth should be a decision, not an oversight.') }}
       {{ text_field(form, 'retention_count', 'Versions to keep', type='number',
         hint='Only used when "keep only the newest few" is selected.') }}
-      <h2>First distribution</h2>
-      {{ text_field(form, 'codename', 'Codename', required=True,
-        hint='What clients put in sources.list, e.g. bookworm or stable.') }}
-      {{ text_field(form, 'suite', 'Suite',
-        hint='Optional. Defaults to the codename.') }}
-      {{ text_field(form, 'components', 'Components', required=True,
-        hint='Space or comma separated, e.g. main contrib.') }}
-      {{ text_field(form, 'architectures', 'Architectures', required=True,
-        hint='Space or comma separated, e.g. amd64 arm64. Packages marked "all" are published to every one.') }}
+      {#
+        Both subdivisions are shown, and only the chosen format's is validated.
+        Hiding one would need JavaScript, and every flow here has to work
+        without it (11) -- so each fieldset says plainly which format it belongs
+        to instead, and neither is marked required at the HTML level, because
+        whether it is depends on the answer above.
+      #}
+      <fieldset class="subdivision">
+        <legend>
+          <h2>First distribution</h2>
+        </legend>
+        <p class="field-hint">Fill this in for an APT repository. More can be added later.</p>
+        {{ text_field(form, 'codename', 'Codename',
+          hint='What clients put in sources.list, e.g. bookworm or stable.') }}
+        {{ text_field(form, 'suite', 'Suite',
+          hint='Optional. Defaults to the codename.') }}
+        {{ text_field(form, 'components', 'Components',
+          hint='Space or comma separated, e.g. main contrib.') }}
+        {{ text_field(form, 'architectures', 'Architectures',
+          hint='Space or comma separated, e.g. amd64 arm64. Packages marked "all" are published to every one.') }}
+      </fieldset>
+      <fieldset class="subdivision">
+        <legend>
+          <h2>First variant</h2>
+        </legend>
+        <p class="field-hint">Fill this in for an RPM repository. More can be added later.</p>
+        {{ text_field(form, 'variant_name', 'Variant name',
+          hint='The distribution release this tree is built for, e.g. el9 or fc41.') }}
+        {{ text_field(form, 'variant_arch', 'Variant architecture',
+          hint='One architecture per variant, e.g. x86_64 or aarch64. Packages marked "noarch" are accepted by every variant.') }}
+      </fieldset>
       <h2>Release fields</h2>
+      <p class="field-hint">Recorded in an APT Release file, and unused by RPM repositories.</p>
       {{ text_field(form, 'origin', 'Origin', hint='Optional. Defaults to the repository name.') }}
       {{ text_field(form, 'label', 'Label', hint='Optional. Defaults to the repository name.') }}
       <button type="submit" class="button-primary">Create repository</button>

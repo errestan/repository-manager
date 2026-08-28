@@ -7,6 +7,7 @@ migrations and the models have not drifted apart.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from collections.abc import AsyncIterator, Callable, Iterator
@@ -325,3 +326,82 @@ def signing_key(sync_session: Session, keyring: Keyring) -> SigningKey:
     sync_session.commit()
     sync_session.refresh(key)
     return key
+
+
+# ------------------------------------------------------------------ createrepo_c
+
+
+#: A stand-in for ``createrepo_c`` that writes just enough ``repodata`` to be
+#: signed and read back.  It records the argv it was given, so a test can assert
+#: on the flags without needing the real tool.
+FAKE_CREATEREPO = """#!/usr/bin/env python3
+import os, pathlib, sys
+
+target = pathlib.Path(sys.argv[-1])
+log = pathlib.Path(__file__).with_suffix(".log")
+with log.open("a") as handle:
+    handle.write("\\x00".join(sys.argv[1:]) + "\\n")
+
+if os.environ.get("FAKE_CREATEREPO_FAIL"):
+    sys.stderr.write("createrepo_c: refusing, as this test asked it to\\n")
+    raise SystemExit(1)
+
+packages = sorted(p.name for p in (target / "Packages").glob("*.rpm"))
+repodata = target / "repodata"
+repodata.mkdir(parents=True, exist_ok=True)
+(repodata / "repomd.xml").write_text(
+    "<?xml version=\\"1.0\\" encoding=\\"UTF-8\\"?>\\n"
+    "<repomd xmlns=\\"http://linux.duke.edu/metadata/repo\\">\\n"
+    "  <revision>0</revision>\\n"
+    + "".join(f"  <!-- {name} -->\\n" for name in packages)
+    + "</repomd>\\n"
+)
+"""
+
+
+@dataclass(frozen=True)
+class FakeCreaterepo:
+    """Where the stand-in lives, and what it has been asked to do."""
+
+    binary: Path
+
+    @property
+    def invocations(self) -> list[list[str]]:
+        log = self.binary.with_suffix(".log")
+        if not log.is_file():
+            return []
+        return [line.split("\x00") for line in log.read_text().splitlines()]
+
+
+@pytest.fixture
+def fake_createrepo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeCreaterepo:
+    """Put a stand-in ``createrepo_c`` on PATH for the whole process.
+
+    The unit suite has to run on a machine with no RPM tooling -- which includes
+    every developer box that is not Fedora, and every CI job here except the
+    integration one.  What these tests are checking is this application's half
+    of the arrangement: that the tool is invoked with the right arguments in the
+    right directory, that its failure becomes a job failure with its own words
+    in it, and that ``repomd.xml`` is signed afterwards.  Whether createrepo_c
+    produces valid metadata is createrepo_c's business, and is proved against
+    the real binary and a real ``dnf`` in tests/integration.
+
+    PATH is patched rather than a setting introduced, so the lookup under test
+    is the same ``shutil.which`` call a deployment makes.
+    """
+    directory = tmp_path / "fake-bin"
+    directory.mkdir()
+    binary = directory / "createrepo_c"
+    binary.write_text(FAKE_CREATEREPO)
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
+    return FakeCreaterepo(binary=binary)
+
+
+@pytest.fixture
+def failing_createrepo(
+    fake_createrepo: FakeCreaterepo, monkeypatch: pytest.MonkeyPatch
+) -> FakeCreaterepo:
+    """The same stand-in, told to exit non-zero with something on stderr."""
+    monkeypatch.setenv("FAKE_CREATEREPO_FAIL", "1")
+    return fake_createrepo

@@ -62,6 +62,11 @@ ENDPOINTS = [
     Endpoint("POST", "/repositories/new", Role.ADMIN),
     Endpoint("GET", "/repositories/internal/distributions", Role.ADMIN),
     Endpoint("POST", "/repositories/internal/distributions", Role.ADMIN),
+    # The fixture repository is APT, so these answer 404 for an admin -- which
+    # is the point: the permission layer runs first, and only then does the
+    # handler decide the route does not apply to this format.
+    Endpoint("GET", "/repositories/internal/variants", Role.ADMIN),
+    Endpoint("POST", "/repositories/internal/variants", Role.ADMIN),
     Endpoint("POST", "/keys", Role.ADMIN),
     Endpoint("POST", "/keys/test-key/delete", Role.ADMIN),
 ]

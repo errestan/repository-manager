@@ -33,12 +33,15 @@ from repository_manager.metadata.deb import (
     PackageFormatError,
     read_deb,
 )
+from repository_manager.metadata.rpm import ARCH_NOARCH, RpmMetadata, read_rpm
 from repository_manager.models import (
     AptComponent,
     AptDistribution,
     Package,
     PackagePublication,
     Repository,
+    RepositoryType,
+    RpmVariant,
     UploadSource,
 )
 from repository_manager.security.paths import (
@@ -56,7 +59,8 @@ log = get_logger(__name__)
 # generating directory indexes does not advertise half-received files.
 INCOMING_DIRNAME = ".incoming"
 
-# Architecture-independent packages are accepted for any target (5.1).
+# Architecture-independent packages are accepted for any target (5.1).  Debian
+# spells it `all` and rpm spells it `noarch`; both mean the same thing.
 ARCH_ALL = "all"
 
 STREAM_CHUNK_BYTES = 1024 * 1024
@@ -124,16 +128,45 @@ def _check_architecture(metadata: DebMetadata, distribution: AptDistribution) ->
     )
 
 
+def _check_variant_architecture(metadata: RpmMetadata, variant: RpmVariant) -> None:
+    """A variant publishes exactly one architecture, plus ``noarch`` (4.2).
+
+    Stricter than the APT check by construction rather than by choice: an APT
+    distribution lists several architectures and sorts packages into per-arch
+    indices, whereas an RPM variant *is* the architecture, and a mismatched
+    package would be offered to clients that cannot install it.
+    """
+    if metadata.architecture in (ARCH_NOARCH, variant.arch):
+        return
+    raise UploadError(
+        f"{metadata.name} is built for {metadata.architecture}, but {variant.name}/{variant.arch} "
+        f"publishes {variant.arch} and {ARCH_NOARCH} only."
+    )
+
+
 async def _existing_package(
-    session: AsyncSession, repository: Repository, metadata: DebMetadata
+    session: AsyncSession,
+    repository: Repository,
+    *,
+    name: str,
+    version: str,
+    architecture: str,
+    release: str | None = None,
 ) -> Package | None:
+    """Find a package already published under this exact identity.
+
+    ``release`` is part of the identity for RPM and meaningless for APT, where
+    it is always NULL; matching on it unconditionally is what keeps
+    ``foo-1.0-1`` and ``foo-1.0-2`` from being mistaken for the same upload.
+    """
     found: Package | None = await session.scalar(
         select(Package)
         .where(
             Package.repository_id == repository.id,
-            Package.name == metadata.name,
-            Package.version == metadata.version,
-            Package.architecture == metadata.architecture,
+            Package.name == name,
+            Package.version == version,
+            Package.release.is_(None) if release is None else Package.release == release,
+            Package.architecture == architecture,
         )
         .options(selectinload(Package.publications))
     )
@@ -176,9 +209,21 @@ async def publish_deb(
 
         _check_architecture(metadata, distribution)
 
-        existing = await _existing_package(session, repository, metadata)
+        existing = await _existing_package(
+            session,
+            repository,
+            name=metadata.name,
+            version=metadata.version,
+            architecture=metadata.architecture,
+        )
         if existing is not None:
-            return await _republish(session, existing, metadata, component)
+            return await _republish(
+                session,
+                existing,
+                identity=f"{metadata.name} {metadata.version} ({metadata.architecture})",
+                sha256=metadata.digests.sha256,
+                component_id=component.id,
+            )
 
         relative_path = metadata.pool_path(component.name)
         await asyncio.to_thread(_install_into_pool, root, staged, relative_path)
@@ -217,31 +262,124 @@ async def publish_deb(
 async def _republish(
     session: AsyncSession,
     existing: Package,
-    metadata: DebMetadata,
-    component: AptComponent,
+    *,
+    identity: str,
+    sha256: str,
+    component_id: int | None = None,
+    variant_id: int | None = None,
 ) -> UploadOutcome:
-    """Handle an upload of a name/version/architecture that is already present (5.1).
+    """Handle an upload of an identity that is already present (5.1).
 
     Identical bytes are a no-op success, because a CI job that retries an upload
     should not fail.  Different bytes under the same version are always refused:
     a client that already installed the old file would never be told.
     """
-    if existing.sha256 != metadata.digests.sha256:
+    if existing.sha256 != sha256:
         raise UploadError(
-            f"{metadata.name} {metadata.version} ({metadata.architecture}) is already published "
-            "with different contents. Publish a new version rather than replacing one clients "
-            "may already have installed.",
+            f"{identity} is already published with different contents. Publish a new version "
+            "rather than replacing one clients may already have installed.",
             status_code=409,
         )
 
-    already = any(publication.component_id == component.id for publication in existing.publications)
+    already = any(
+        publication.component_id == component_id and publication.variant_id == variant_id
+        for publication in existing.publications
+    )
     if already:
         return UploadOutcome(package=existing, created=False)
 
-    # Same bytes, new target: one pool file, a second publication (9).
-    session.add(PackagePublication(package_id=existing.id, component_id=component.id))
+    # Same bytes, new target: one stored file, a second publication (9).
+    session.add(
+        PackagePublication(package_id=existing.id, component_id=component_id, variant_id=variant_id)
+    )
     await session.flush()
     return UploadOutcome(package=existing, created=True)
+
+
+async def publish_rpm(
+    session: AsyncSession,
+    settings: Settings,
+    *,
+    repository: Repository,
+    variant: RpmVariant,
+    staged: Path,
+    actor: str | None = None,
+    source: UploadSource = UploadSource.WEB,
+) -> UploadOutcome:
+    """Validate a staged ``.rpm`` and publish it into one variant (5.1).
+
+    Takes ownership of ``staged``: on success it is moved into the variant's
+    ``Packages`` directory, and on any failure it is removed.
+
+    The steps are deliberately the same as :func:`publish_deb`'s, in the same
+    order.  What differs is only what a "target" is and where the file lands --
+    and, quietly, that nothing is precomputed for the index here, because
+    ``createrepo_c`` will read the file again when the regeneration job runs
+    (4.2).
+    """
+    root = resolve_within_roots(Path(repository.root_path), settings.allowed_roots)
+    variant_path = f"{variant.name}/{variant.arch}"
+    try:
+        try:
+            metadata = await asyncio.to_thread(read_rpm, staged)
+        except PackageFormatError as exc:
+            raise UploadError(str(exc)) from exc
+
+        _check_variant_architecture(metadata, variant)
+
+        existing = await _existing_package(
+            session,
+            repository,
+            name=metadata.name,
+            version=metadata.version,
+            release=metadata.release,
+            architecture=metadata.architecture,
+        )
+        if existing is not None:
+            return await _republish(
+                session,
+                existing,
+                identity=metadata.nevra,
+                sha256=metadata.digests.sha256,
+                variant_id=variant.id,
+            )
+
+        relative_path = metadata.variant_path(variant_path)
+        await asyncio.to_thread(_install_into_pool, root, staged, relative_path)
+
+        package = Package(
+            repository_id=repository.id,
+            name=metadata.name,
+            source_name=metadata.source_name,
+            epoch=metadata.epoch,
+            version=metadata.version,
+            release=metadata.release,
+            architecture=metadata.architecture,
+            relative_path=relative_path,
+            size=metadata.digests.size,
+            sha256=metadata.digests.sha256,
+            # Header fields, for the interface to show.  Unlike an APT stanza
+            # this is never rendered into an index, so nothing downstream breaks
+            # if a package carries a tag this version does not know about.
+            control_json=dict(metadata.header),
+            uploaded_by=actor,
+            uploaded_via=source,
+        )
+        package.publications.append(PackagePublication(variant_id=variant.id))
+        session.add(package)
+        await session.flush()
+    finally:
+        staged.unlink(missing_ok=True)
+
+    log.info(
+        "package published",
+        repository=repository.slug,
+        package=package.name,
+        version=package.full_version,
+        architecture=package.architecture,
+        variant=variant_path,
+    )
+    return UploadOutcome(package=package, created=True)
 
 
 async def load_publication(
@@ -253,6 +391,7 @@ async def load_publication(
         .options(
             selectinload(PackagePublication.package).selectinload(Package.publications),
             selectinload(PackagePublication.component),
+            selectinload(PackagePublication.variant),
         )
     )
     if publication is None or publication.package.repository_id != repository.id:
@@ -288,7 +427,7 @@ async def remove_publication(
     pool_file = relative_within(root, package.relative_path)
     await session.delete(package)
     await session.flush()
-    await asyncio.to_thread(_unlink_and_prune, root, pool_file)
+    await asyncio.to_thread(_unlink_and_prune, pool_file, _prune_boundary(root, repository))
     log.info(
         "package removed",
         repository=repository.slug,
@@ -298,12 +437,34 @@ async def remove_publication(
     return True
 
 
-def _unlink_and_prune(root: Path, pool_file: Path) -> None:
-    """Delete a pool file and any directories it leaves empty behind it."""
+def _prune_boundary(root: Path, repository: Repository) -> Path | None:
+    """The directory an emptied tree must never be pruned past, or ``None``.
+
+    APT pool directories are per source package and are worth removing once
+    they empty -- ``pool/main/l/libfoo/`` left behind for a package nobody
+    publishes any more is just litter.
+
+    An RPM variant's directories are not litter, so nothing is pruned there at
+    all.  ``createrepo_c`` indexes ``<variant>/Packages`` whether or not
+    anything is in it, and removing the last package from a variant would
+    otherwise delete the tree and turn the next regeneration into a failure.
+    """
+    if repository.type is RepositoryType.APT:
+        return root / "pool"
+    return None
+
+
+def _unlink_and_prune(pool_file: Path, boundary: Path | None) -> None:
+    """Delete a stored file and any directories it leaves empty behind it.
+
+    Stops at ``boundary``, which is never itself removed; ``None`` deletes the
+    file and leaves every directory in place.
+    """
     pool_file.unlink(missing_ok=True)
+    if boundary is None:
+        return
     directory = pool_file.parent
-    pool_root = root / "pool"
-    while directory != pool_root and directory.is_relative_to(pool_root):
+    while directory != boundary and directory.is_relative_to(boundary):
         try:
             directory.rmdir()
         except OSError:

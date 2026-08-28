@@ -10,12 +10,12 @@ import pytest
 from repository_manager.metadata.deb import (
     PackageFormatError,
     description_md5,
-    digest_file,
     pool_prefix,
     read_deb,
     split_version,
     version_sort_key,
 )
+from repository_manager.metadata.digests import digest_file
 from tests.support.debs import DebSpec, build_deb
 
 

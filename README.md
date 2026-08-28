@@ -6,13 +6,14 @@ Create repositories, upload and remove packages, and have the indices and GPG si
 regenerated correctly — without hand-running `apt-ftparchive` or `createrepo_c`.
 
 > **Status: pre-alpha.** The specification is complete
-> ([`specification.md`](specification.md)). **M1–M3 are done**: configuration, database and
+> ([`specification.md`](specification.md)). **M1–M4 are done**: configuration, database and
 > migrations, the accessible layout, health probes and sub-path/proxy handling (M1); APT
 > repository creation, signing keys, upload and removal, pure-Python index generation and
-> the job queue, verified against a real `apt-get` (M2); and LDAP login, server-side
-> sessions, CSRF, role mapping and the audit log (M3). Still missing: RPM support (M4), the
-> REST API and scoped tokens (M5), and rate limiting, retention enforcement and metrics
-> (M6). Not usable in production.
+> the job queue, verified against a real `apt-get` (M2); LDAP login, server-side sessions,
+> CSRF, role mapping and the audit log (M3); and RPM repositories with variants,
+> `createrepo_c` indexing and `repomd.xml` signing, verified against a real `dnf` (M4).
+> Still missing: the REST API and scoped tokens (M5), and rate limiting, retention
+> enforcement and metrics (M6). Not usable in production.
 
 ## Features
 

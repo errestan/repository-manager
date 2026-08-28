@@ -148,8 +148,7 @@ module = [
 strict = true
 
 [[tool.mypy.overrides]]
-# rpmfile joins this list at M4, when createrepo_c integration imports it.
-module = ["debian.*", "ldap3.*", "axe_playwright_python.*"]
+module = ["debian.*", "ldap3.*", "rpmfile.*", "axe_playwright_python.*"]
 ignore_missing_imports = true
 
 # --------------------------------------------------------------------------- pytest

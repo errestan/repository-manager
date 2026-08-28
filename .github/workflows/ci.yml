@@ -99,12 +99,18 @@ jobs:
       # createrepo_c generates RPM metadata; apt/dnf are what actually prove the
       # generated repositories are valid (AD-2). These are the point of this job.
       # zstd is needed to read packages whose control member dpkg compressed with
-      # it -- python-debian shells out to `unzstd` for those.
+      # it -- python-debian shells out to `unzstd` for those. `rpm` provides
+      # rpmbuild, which builds the .rpm fixtures: indexing packages this project
+      # built itself would only prove it agrees with itself (13.4).
+      #
+      # tests/integration/test_environment.py asserts every one of these is
+      # actually here, because a dropped package would otherwise turn the tests
+      # that need it into silent skips and leave the job green.
       - name: System dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            createrepo-c gnupg dpkg-dev apt-utils dnf zstd
+            createrepo-c gnupg dpkg-dev apt-utils dnf rpm zstd
 
       - uses: astral-sh/setup-uv@v5
         with:

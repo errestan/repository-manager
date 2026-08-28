@@ -580,10 +580,14 @@ async def test_the_plan_reflects_what_is_published(
     assert distribution.stanzas["contrib"] == []
 
 
-async def test_an_rpm_repository_is_refused_until_m4(
+async def test_a_repository_with_no_signing_key_fails_before_anything_is_written(
     session: AsyncSession, settings: Settings
 ) -> None:
-    """RPM support lands in M4; the job must say so rather than half-work (13.6)."""
+    """Unsigned metadata is worse than none: apt and dnf both refuse it (10.5).
+
+    Checked for both formats and before any generator runs, so the failure is a
+    job that did nothing rather than a tree clients cannot verify.
+    """
     repository = Repository(slug="el9", name="EL9", type=RepositoryType.RPM, root_path="/srv/el9")
     session.add(repository)
     await session.flush()
@@ -596,5 +600,5 @@ async def test_an_rpm_repository_is_refused_until_m4(
         settings=settings,
         sessionmaker=lambda: session,  # type: ignore[arg-type]
     )
-    with pytest.raises(publishing.PublishError, match="M4"):
+    with pytest.raises(publishing.PublishError, match="no signing key"):
         await publishing.regenerate_metadata(context)

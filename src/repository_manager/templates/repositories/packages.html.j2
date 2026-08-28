@@ -43,7 +43,8 @@
         {% for name in architectures %}
           <option value="{{ name }}" {% if architecture == name %}selected{% endif %}>{{ name }}</option>
         {% endfor %}
-        <option value="all" {% if architecture == 'all' %}selected{% endif %}>all</option>
+        <option value="{{ any_architecture }}"
+                {% if architecture == any_architecture %}selected{% endif %}>{{ any_architecture }}</option>
       </select>
     </div>
     <button type="submit">Search</button>
@@ -83,6 +84,8 @@
               <td>
                 {% if publication.component %}
                   {{ publication.component.distribution.codename }} / {{ publication.component.name }}
+                {% elif publication.variant %}
+                  <code>{{ publication.variant.name }}/{{ publication.variant.arch }}</code>
                 {% else %}
                   —
                 {% endif %}

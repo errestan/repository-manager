@@ -4,9 +4,16 @@ Regeneration is always a job, never inline (AD-8).  An upload returns as soon
 as the file is safely in the pool; the index rebuild that follows is bounded by
 the repository's size, not the request's patience.
 
-The plan handed to the generator is built entirely from the database.  Nothing
-in this module reads a ``.deb`` -- the stanza was computed once, at upload, and
-stored on the row.
+For APT the plan handed to the generator is built entirely from the database.
+Nothing in this module reads a ``.deb`` -- the stanza was computed once, at
+upload, and stored on the row.
+
+RPM is the other way round, and deliberately so (AD-2): ``createrepo_c`` reads
+the packages on disk itself, so the plan is only the *shape* of the tree -- which
+variants exist -- and the database is never asked what is inside them.  The two
+formats therefore fail differently, and it is worth knowing which you are
+looking at: a wrong APT index means the row was wrong, a wrong RPM index means
+the filesystem was.
 """
 
 from __future__ import annotations
@@ -24,7 +31,7 @@ from repository_manager.config import Settings
 from repository_manager.jobs.lock import repository_lock
 from repository_manager.jobs.queue import JobContext, JobQueue
 from repository_manager.logging import get_logger
-from repository_manager.metadata import apt
+from repository_manager.metadata import apt, repodata
 from repository_manager.models import (
     AptComponent,
     AptDistribution,
@@ -116,6 +123,24 @@ async def build_apt_plan(session: AsyncSession, repository: Repository) -> apt.R
     )
 
 
+async def build_rpm_plan(session: AsyncSession, repository: Repository) -> repodata.RepositoryPlan:
+    """The variants to reindex.
+
+    Takes no package data at all: ``createrepo_c`` walks each variant's
+    ``Packages`` directory and builds the indices from the files themselves
+    (4.2).  ``session`` is unused for that reason and kept only so both plan
+    builders have the same signature -- an asymmetry here would be read as an
+    oversight rather than as the design.
+    """
+    del session
+    return repodata.RepositoryPlan(
+        variants=tuple(
+            repodata.VariantPlan(name=variant.name, arch=variant.arch)
+            for variant in repository.variants
+        )
+    )
+
+
 def write_apt_metadata(
     root: Path,
     plan: apt.RepositoryPlan,
@@ -140,6 +165,28 @@ def write_apt_metadata(
     return sum(len(files) for files in generated.values())
 
 
+def write_rpm_metadata(
+    root: Path,
+    plan: repodata.RepositoryPlan,
+    *,
+    signer: repodata.Signer,
+    key_name: str,
+    public_key: str,
+) -> dict[str, repodata.VariantResult]:
+    """Blocking half of an RPM regeneration: createrepo_c, signing, filesystem.
+
+    Called through ``asyncio.to_thread`` for the same reason as its APT
+    counterpart, and more urgently: ``createrepo_c`` is a subprocess that can
+    run for minutes on a large variant, and running it on the event loop would
+    stop the application answering anything at all until it finished.
+    """
+    with repository_lock(root, timeout=LOCK_TIMEOUT_SECONDS):
+        repodata.create_skeleton(root, plan)
+        generated = repodata.generate(root, plan, signer=signer)
+        atomic_write_text(root / repodata.public_key_filename(key_name), public_key)
+    return generated
+
+
 async def regenerate_metadata(context: JobContext) -> None:
     """Job handler for :data:`JobType.REGENERATE_METADATA`."""
     from repository_manager.services.keys import build_signer
@@ -150,16 +197,16 @@ async def regenerate_metadata(context: JobContext) -> None:
     settings = context.settings
     async with context.sessionmaker() as session:
         repository = await load_for_publish(session, context.repository_id)
-        if repository.type is not RepositoryType.APT:
-            raise PublishError(
-                f"{repository.slug!r} is an RPM repository; createrepo_c integration "
-                "arrives in M4 (specification.md 13.6)."
-            )
         if repository.signing_key is None:
             raise PublishError(
                 f"{repository.slug!r} has no signing key, so its metadata cannot be signed."
             )
-        plan = await build_apt_plan(session, repository)
+        is_apt = repository.type is RepositoryType.APT
+        plan: apt.RepositoryPlan | repodata.RepositoryPlan = (
+            await build_apt_plan(session, repository)
+            if is_apt
+            else await build_rpm_plan(session, repository)
+        )
         key = repository.signing_key
         key_name, public_key = key.name, key.public_key_armored
         root_path = repository.root_path
@@ -174,19 +221,41 @@ async def regenerate_metadata(context: JobContext) -> None:
     signer = build_signer(settings, key)
 
     await context.set_progress(30)
-    written = await asyncio.to_thread(
-        write_apt_metadata,
-        root,
-        plan,
-        signer=signer,
-        key_name=key_name,
-        public_key=public_key,
-    )
+    if isinstance(plan, apt.RepositoryPlan):
+        written = await asyncio.to_thread(
+            write_apt_metadata,
+            root,
+            plan,
+            signer=signer,
+            key_name=key_name,
+            public_key=public_key,
+        )
+        targets = ", ".join(d.codename for d in plan.distributions) or "(none)"
+        summary = f"Wrote {written} index files across: {targets}."
+        count = written
+    else:
+        try:
+            results = await asyncio.to_thread(
+                write_rpm_metadata,
+                root,
+                plan,
+                signer=signer,
+                key_name=key_name,
+                public_key=public_key,
+            )
+        except repodata.RepodataError as exc:
+            # Surfaced as a job failure with the tool's own words rather than a
+            # traceback: "createrepo_c is not installed" is something an
+            # operator can act on, and a stack trace is not (6).
+            raise PublishError(str(exc)) from exc
+        indexed = sum(result.packages for result in results.values())
+        targets = ", ".join(sorted(results)) or "(none)"
+        summary = f"Indexed and signed {indexed} package(s) across: {targets}."
+        count = len(results)
 
     await context.set_progress(100)
-    distributions = ", ".join(d.codename for d in plan.distributions) or "(none)"
-    await context.log(f"Wrote {written} index files across: {distributions}.")
-    log.info("metadata regenerated", repository=slug, files=written)
+    await context.log(summary)
+    log.info("metadata regenerated", repository=slug, type=repository.type.value, written=count)
 
 
 def register_handlers(queue: JobQueue) -> None:
@@ -210,7 +279,7 @@ async def request_regeneration(
     )
 
 
-def initial_metadata(
+def initial_apt_metadata(
     settings: Settings,
     root: Path,
     plan: apt.RepositoryPlan,
@@ -227,3 +296,23 @@ def initial_metadata(
     """
     resolve_within_roots(root, settings.allowed_roots)
     return write_apt_metadata(root, plan, signer=signer, key_name=key_name, public_key=public_key)
+
+
+def initial_rpm_metadata(
+    settings: Settings,
+    root: Path,
+    plan: repodata.RepositoryPlan,
+    *,
+    signer: repodata.Signer,
+    key_name: str,
+    public_key: str,
+) -> dict[str, repodata.VariantResult]:
+    """The RPM equivalent: an empty but signed ``repodata`` per variant (4.3).
+
+    ``createrepo_c`` is perfectly happy to index a directory with no packages
+    in it, and the result is a repository ``dnf`` can be pointed at and will
+    refresh without complaint -- which is the whole point of doing this now
+    rather than at first upload.
+    """
+    resolve_within_roots(root, settings.allowed_roots)
+    return write_rpm_metadata(root, plan, signer=signer, key_name=key_name, public_key=public_key)

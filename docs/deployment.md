@@ -30,7 +30,8 @@ server {
 
     # ---------------------------------------------------------------- repositories
     #
-    # Static, read-only, and anonymous. This is what `apt update` talks to.
+    # Static, read-only, and anonymous. This is what `apt update` and
+    # `dnf makecache` talk to.
     location /repos/ {
         alias /srv/repositories/;
         autoindex on;
@@ -42,10 +43,20 @@ server {
 
         # Indices change on every publish; packages never change once published,
         # because overwriting a published version is refused (5.1).
+        #
+        # `dists` and `pool` are the APT tree; `repodata` and `Packages` are the
+        # RPM one, one pair per variant, so those patterns are not anchored to a
+        # fixed depth.
         location ~ ^/repos/[^/]+/dists/ {
             add_header Cache-Control "no-cache";
         }
         location ~ ^/repos/[^/]+/pool/ {
+            add_header Cache-Control "public, max-age=31536000, immutable";
+        }
+        location ~ ^/repos/[^/]+/.*/repodata/ {
+            add_header Cache-Control "no-cache";
+        }
+        location ~ ^/repos/[^/]+/.*/Packages/ {
             add_header Cache-Control "public, max-age=31536000, immutable";
         }
 
@@ -108,7 +119,9 @@ that only works at the domain root is a build failure rather than a surprise in 
 
 ## Client setup
 
-Each repository's page shows the exact two commands. They come to this:
+Each repository's page shows the exact two commands for its own format. They come to this.
+
+### APT
 
 ```sh
 # 1. Trust the repository's signing key.
@@ -126,6 +139,39 @@ sudo apt update
 `signed-by` scopes the trust to this one repository. Without it the key would be trusted for
 *every* source on the machine, which is how a compromised third-party repository turns into
 a compromised system.
+
+### RPM
+
+```sh
+# 1. Trust the repository's signing key.
+sudo curl -fsSL https://packages.example.com/repos/el/RPM-GPG-KEY-internal \
+  -o /etc/pki/rpm-gpg/RPM-GPG-KEY-internal
+
+# 2. Add the repository. One section per variant.
+sudo tee /etc/yum.repos.d/el.repo <<'EOF'
+[el-el9-x86_64]
+name=Enterprise Linux — el9/x86_64
+baseurl=https://packages.example.com/repos/el/el9/x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-internal
+EOF
+
+sudo dnf makecache
+```
+
+The two checks are not the same thing, and both are worth having:
+
+- `repo_gpgcheck=1` verifies `repodata/repomd.xml` against `repomd.xml.asc`, which this
+  application signs on every regeneration. Every other metadata file is checksummed *from*
+  `repomd.xml`, so this one signature covers the whole index.
+- `gpgcheck=1` verifies each package's own signature, which is a promise only whoever built
+  the package can make. If your build pipeline does not sign its RPMs, this will refuse
+  them — sign them, rather than turning the check off.
+
+Unlike APT, RPM has no `signed-by` equivalent: an imported key is trusted for every
+repository on the machine. Import only keys you control.
 
 ## Filesystem ownership
 

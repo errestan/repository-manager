@@ -15,11 +15,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from repository_manager.metadata.digests import FileDigests, digest_file
+
 # Every ar archive, and therefore every .deb, starts with this (5.1).
 DEB_MAGIC = b"!<arch>\n"
-
-# Read in chunks so a 2 GiB upload is hashed without being held in memory.
-HASH_CHUNK_BYTES = 1024 * 1024
 
 # Debian package and version grammar, from Debian Policy 5.6.1 and 5.6.12.
 PACKAGE_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9+._-]+$")
@@ -41,14 +40,6 @@ class PackageFormatError(Exception):
     The message is shown to whoever uploaded it, so it says what is wrong and
     what to do, not merely that validation failed.
     """
-
-
-@dataclass(frozen=True)
-class FileDigests:
-    size: int
-    md5: str
-    sha1: str
-    sha256: str
 
 
 @dataclass(frozen=True)
@@ -118,28 +109,6 @@ def description_md5(description: str) -> str:
     """
     payload = description if description.endswith("\n") else description + "\n"
     return hashlib.md5(payload.encode("utf-8"), usedforsecurity=False).hexdigest()
-
-
-def digest_file(path: Path) -> FileDigests:
-    """MD5, SHA1 and SHA256 in a single pass over the file.
-
-    MD5 and SHA1 are here because the ``Packages`` and ``Release`` formats
-    require them, not because they are trusted: SHA256 is the one that carries
-    the integrity guarantee.
-    """
-    md5 = hashlib.md5(usedforsecurity=False)
-    sha1 = hashlib.sha1(usedforsecurity=False)
-    sha256 = hashlib.sha256()
-    size = 0
-    with path.open("rb") as handle:
-        while chunk := handle.read(HASH_CHUNK_BYTES):
-            size += len(chunk)
-            md5.update(chunk)
-            sha1.update(chunk)
-            sha256.update(chunk)
-    return FileDigests(
-        size=size, md5=md5.hexdigest(), sha1=sha1.hexdigest(), sha256=sha256.hexdigest()
-    )
 
 
 def check_magic(path: Path) -> None:

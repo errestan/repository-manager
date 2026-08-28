@@ -1,0 +1,71 @@
+{% extends "base.html.j2" %}
+{% from "partials/tables.html.j2" import scrollable %}
+{% from "partials/forms.html.j2" import error_summary, text_field %}
+{% block title %}
+  {% if form.errors %}Error: {% endif %}Variants of {{ repository.name }} — Repository Manager
+{% endblock %}
+{% block description %}
+  Add and review the variants an RPM repository publishes.
+{% endblock %}
+{% block content %}
+  <nav aria-label="Breadcrumb" class="breadcrumb">
+    <ol>
+      <li>
+        <a href="{{ url_for('repository_list') }}">Repositories</a>
+      </li>
+      <li>
+        <a href="{{ url_for('repository_detail', slug=repository.slug) }}">{{ repository.name }}</a>
+      </li>
+      <li aria-current="page">Variants</li>
+    </ol>
+  </nav>
+  <h1>Variants</h1>
+  {{ error_summary(form) }}
+  <p class="lede">
+    Each variant is an independently indexed subtree with its own <code>repodata</code>, its own
+    client snippet and its own packages. A package is uploaded into exactly one of them.
+  </p>
+  {% if repository.variants %}
+    {% call scrollable("Variants") %}
+      <table class="data-table">
+        <caption>Variants published by {{ repository.name }}.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Variant</th>
+            <th scope="col">Architecture</th>
+            <th scope="col">Path</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for variant in repository.variants %}
+            <tr>
+              <th scope="row">
+                <code>{{ variant.name }}</code>
+              </th>
+              <td>
+                <code>{{ variant.arch }}</code>
+              </td>
+              <td>
+                <code>{{ variant.name }}/{{ variant.arch }}</code>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+  {% else %}
+    <p>This repository publishes no variants yet.</p>
+  {% endif %}
+  <h2>Add a variant</h2>
+  <p>Adding one queues a metadata rebuild, so the new tree is indexed and signed straight away.</p>
+  <form method="post"
+        action="{{ url_for('repository_variant_add', slug=repository.slug) }}"
+        class="stacked-form">
+    {% include "partials/csrf.html.j2" %}
+    {{ text_field(form, 'variant_name', 'Variant name', required=True,
+      hint='The distribution release this tree is built for, e.g. el9 or fc41.') }}
+    {{ text_field(form, 'variant_arch', 'Variant architecture', required=True,
+      hint='One architecture per variant, e.g. x86_64 or aarch64.') }}
+    <button type="submit" class="button-primary">Add variant</button>
+  </form>
+{% endblock %}

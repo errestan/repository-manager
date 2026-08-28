@@ -86,25 +86,6 @@
     {% else %}
       <p>No distributions have been configured yet.</p>
     {% endif %}
-    {% if client_snippet %}
-      <h2 id="client-setup">Client setup</h2>
-      <p>
-        Trust the key, then add the source. Both steps are needed: without the key,
-        <code>apt</code> will refuse the repository rather than use it unverified.
-      </p>
-      <h3>1. Install the signing key</h3>
-      <pre class="snippet" role="region" aria-label="Command to install the signing key" tabindex="0"><code>sudo curl -fsSL {{ base_url }}/{{ repository.signing_key.name }}.asc \
-  -o /usr/share/keyrings/{{ repository.signing_key.name }}.asc</code></pre>
-      <h3>2. Add the source</h3>
-      <pre class="snippet"
-           role="region"
-           aria-label="Lines to add to sources.list"
-           tabindex="0"><code>{{ client_snippet }}</code></pre>
-      <p>
-        Write that to <code>/etc/apt/sources.list.d/{{ repository.slug }}.list</code>, then run
-        <code>sudo apt update</code>.
-      </p>
-    {% endif %}
   {% else %}
     <h2>Variants</h2>
     {% if repository.variants %}
@@ -133,6 +114,40 @@
       {% endcall %}
     {% else %}
       <p>No variants have been configured yet.</p>
+    {% endif %}
+  {% endif %}
+  {% if client_snippet and key_install %}
+    <h2 id="client-setup">Client setup</h2>
+    <p>
+      Trust the key, then add the repository. Both steps are needed: without the key,
+      {{ 'apt' if repository.type.value == 'apt' else 'dnf' }} will refuse the repository
+      rather than use it unverified.
+    </p>
+    <h3>1. Install the signing key</h3>
+    <pre class="snippet" role="region" aria-label="Command to install the signing key" tabindex="0"><code>sudo curl -fsSL {{ base_url }}/{{ key_install.filename }} \
+  -o {{ key_install.directory }}/{{ key_install.filename }}</code></pre>
+    {% if repository.type.value == 'apt' %}
+      <h3>2. Add the source</h3>
+      <pre class="snippet"
+           role="region"
+           aria-label="Lines to add to sources.list"
+           tabindex="0"><code>{{ client_snippet }}</code></pre>
+      <p>
+        Write that to <code>/etc/apt/sources.list.d/{{ repository.slug }}.list</code>, then run
+        <code>sudo apt update</code>.
+      </p>
+    {% else %}
+      <h3>2. Add the repository</h3>
+      <pre class="snippet"
+           role="region"
+           aria-label="Contents of the .repo file"
+           tabindex="0"><code>{{ client_snippet }}</code></pre>
+      <p>
+        Write that to <code>/etc/yum.repos.d/{{ repository.slug }}.repo</code>, then run
+        <code>sudo dnf makecache</code>. <code>repo_gpgcheck</code> verifies this repository's
+        metadata signature; <code>gpgcheck</code> verifies each package's own signature, which
+        is a promise only whoever built the packages can make.
+      </p>
     {% endif %}
   {% endif %}
   {% if recent_jobs %}
@@ -171,7 +186,11 @@
       </li>
       {% if identity.can_admin %}
         <li>
-          <a href="{{ url_for('repository_distributions', slug=repository.slug) }}">Manage distributions</a>
+          {% if repository.type.value == 'apt' %}
+            <a href="{{ url_for('repository_distributions', slug=repository.slug) }}">Manage distributions</a>
+          {% else %}
+            <a href="{{ url_for('repository_variants', slug=repository.slug) }}">Manage variants</a>
+          {% endif %}
         </li>
       {% endif %}
       <li>

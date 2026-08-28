@@ -12,13 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from repository_manager.config import Settings
 from repository_manager.logging import get_logger
-from repository_manager.metadata import apt
+from repository_manager.metadata import apt, repodata
 from repository_manager.models import (
     AptArchitecture,
     AptComponent,
     AptDistribution,
     Repository,
     RepositoryType,
+    RpmVariant,
     SigningKey,
 )
 from repository_manager.models.repository import SLUG_MAX_LENGTH
@@ -48,6 +49,18 @@ class DistributionSpec:
     architectures: tuple[str, ...]
     suite: str | None = None
     description: str | None = None
+
+
+@dataclass(frozen=True)
+class VariantSpec:
+    """One requested ``<name>/<arch>`` tree, e.g. ``el9/x86_64`` (4.2)."""
+
+    name: str
+    arch: str
+
+    @property
+    def path(self) -> str:
+        return f"{self.name}/{self.arch}"
 
 
 def slugify(name: str) -> str:
@@ -197,7 +210,7 @@ async def create_apt_repository(
     plan = _plan_from_specs(repository.name, repository.origin, repository.label, distributions)
     signer = key_service.build_signer(settings, key)
     await asyncio.to_thread(
-        publishing.initial_metadata,
+        publishing.initial_apt_metadata,
         settings,
         root,
         plan,
@@ -214,6 +227,136 @@ async def create_apt_repository(
         distributions=[spec.codename for spec in distributions],
     )
     return repository
+
+
+def _check_variants(specs: tuple[VariantSpec, ...]) -> None:
+    if not specs:
+        raise RepositoryServiceError(
+            "An RPM repository needs at least one variant, or clients have nothing to "
+            "point at. A variant is a name and an architecture, for example 'el9' and "
+            "'x86_64'."
+        )
+    seen: set[str] = set()
+    for spec in specs:
+        # Validated by the generator's own rules rather than by a second copy of
+        # them here: these names become directory names, and the module that
+        # creates the directories is the one that should decide what is safe
+        # (4.2, 10.4).
+        try:
+            repodata.VariantPlan(name=spec.name, arch=spec.arch)
+        except repodata.RepodataError as exc:
+            raise RepositoryServiceError(str(exc)) from exc
+        if spec.path in seen:
+            raise RepositoryServiceError(f"Variant {spec.path!r} is listed twice.")
+        seen.add(spec.path)
+
+
+def _variant_plan(specs: tuple[VariantSpec, ...]) -> repodata.RepositoryPlan:
+    return repodata.RepositoryPlan(
+        variants=tuple(repodata.VariantPlan(name=spec.name, arch=spec.arch) for spec in specs)
+    )
+
+
+async def create_rpm_repository(
+    session: AsyncSession,
+    settings: Settings,
+    *,
+    name: str,
+    root_path: str,
+    signing_key_id: int,
+    retention_count: int,
+    variants: tuple[VariantSpec, ...],
+    description: str | None = None,
+    actor: str | None = None,
+) -> Repository:
+    """Create an RPM repository, on disk and in the database (4.3).
+
+    Rows first, filesystem second, for the same reason as
+    :func:`create_apt_repository`: a failure part-way through rolls the
+    transaction back rather than leaving a row pointing at a half-built tree.
+
+    This is the first point at which ``createrepo_c`` has to be present.  It is
+    a better place to discover it is missing than the first upload, which is
+    both later and further from the person who can install it.
+    """
+    if not name.strip():
+        raise RepositoryServiceError("A repository name is required.")
+    if retention_count < 0:
+        raise RepositoryServiceError("Retention must be 'keep all' or a positive number.")
+    _check_variants(variants)
+
+    root = validate_root(root_path, settings)
+    key = await _resolve_key(session, signing_key_id)
+    await key_service.verify_usable(settings, key)
+
+    repository = Repository(
+        slug=await unique_slug(session, slugify(name)),
+        name=name.strip(),
+        type=RepositoryType.RPM,
+        root_path=str(root),
+        description=(description or "").strip() or None,
+        retention_count=retention_count,
+        signing_key_id=key.id,
+        created_by=actor,
+    )
+    for spec in variants:
+        repository.variants.append(RpmVariant(name=spec.name, arch=spec.arch))
+    session.add(repository)
+    await session.flush()
+
+    signer = key_service.build_signer(settings, key)
+    try:
+        await asyncio.to_thread(
+            publishing.initial_rpm_metadata,
+            settings,
+            root,
+            _variant_plan(variants),
+            signer=signer,
+            key_name=key.name,
+            public_key=key.public_key_armored,
+        )
+    except repodata.RepodataError as exc:
+        raise RepositoryServiceError(str(exc)) from exc
+
+    log.info(
+        "repository created",
+        slug=repository.slug,
+        root=str(root),
+        key=key.name,
+        variants=[spec.path for spec in variants],
+    )
+    return repository
+
+
+async def add_variant(
+    session: AsyncSession, repository: Repository, spec: VariantSpec
+) -> RpmVariant:
+    """Add a variant to an existing RPM repository (4.3).
+
+    The new tree is empty until the regeneration job the caller queues runs,
+    which is what writes and signs its first ``repodata``.
+    """
+    if repository.type is not RepositoryType.RPM:
+        raise RepositoryServiceError("Only RPM repositories have variants.")
+    _check_variants((spec,))
+
+    clash = await session.scalar(
+        select(RpmVariant).where(
+            RpmVariant.repository_id == repository.id,
+            RpmVariant.name == spec.name,
+            RpmVariant.arch == spec.arch,
+        )
+    )
+    if clash is not None:
+        raise RepositoryServiceError(
+            f"{repository.name} already has a variant called {spec.path!r}."
+        )
+
+    variant = RpmVariant(repository_id=repository.id, name=spec.name, arch=spec.arch)
+    session.add(variant)
+    await session.flush()
+    log.info("variant added", slug=repository.slug, variant=spec.path)
+    return variant
 
 
 async def add_distribution(

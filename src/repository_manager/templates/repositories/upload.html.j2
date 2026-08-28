@@ -4,7 +4,7 @@
   {% if form.errors %}Error: {% endif %}Upload to {{ repository.name }} — Repository Manager
 {% endblock %}
 {% block description %}
-  Upload a Debian package into one of this repository's components.
+  Upload a package into one of this repository's publication targets.
 {% endblock %}
 {% block content %}
   <nav aria-label="Breadcrumb" class="breadcrumb">
@@ -31,13 +31,13 @@
           class="stacked-form">
       {% include "partials/csrf.html.j2" %}
       {{ select_field(form, 'target', 'Publish into', targets, required=True,
-        empty_label='Choose a distribution and component…') }}
+        empty_label='Choose a distribution and component…' if repository.type.value == 'apt' else 'Choose a variant…') }}
       {% set message = form.messages.get('package') %}
       <div class="field{{ ' field-invalid' if message else '' }}">
         <label for="field-package">
           Package file <span class="required-marker">(required)</span>
         </label>
-        <p class="field-hint" id="hint-package">A <code>.deb</code> file. Architecture must be one this distribution publishes, or <code>all</code>.</p>
+        <p class="field-hint" id="hint-package">{{ package_hint }}</p>
         {% if message %}
           <p class="field-error" id="error-package">
             <span aria-hidden="true">✗</span> <strong>Error:</strong> {{ message }}
@@ -46,7 +46,7 @@
         <input type="file"
                id="field-package"
                name="package"
-               accept=".deb,application/vnd.debian.binary-package"
+               accept="{{ accept }}"
                required
                {% if message %}aria-invalid="true"{% endif %}
                aria-describedby="hint-package{{ ' error-package' if message else '' }}">
@@ -56,8 +56,13 @@
   {% else %}
     <div class="callout" role="alert">
       <p>
-        This repository has no components to publish into yet.
-        <a href="{{ url_for('repository_distributions', slug=repository.slug) }}">Add a distribution</a> first.
+        {% if repository.type.value == 'apt' %}
+          This repository has no components to publish into yet.
+          <a href="{{ url_for('repository_distributions', slug=repository.slug) }}">Add a distribution</a> first.
+        {% else %}
+          This repository has no variants to publish into yet.
+          <a href="{{ url_for('repository_variants', slug=repository.slug) }}">Add a variant</a> first.
+        {% endif %}
       </p>
     </div>
   {% endif %}

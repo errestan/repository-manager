@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 from repository_manager.__about__ import __version__
 from repository_manager.models import Repository
 from repository_manager.web.templating import THEME_COOKIE
-from tests.conftest import AppFactory
+from tests.conftest import AppFactory, FakeCreaterepo
 
 # --------------------------------------------------------------- health
 
@@ -32,6 +33,60 @@ def test_readyz_checks_dependencies(client: TestClient) -> None:
     assert body["status"] == "ok"
     assert body["checks"]["database"] == "ok"
     assert body["checks"]["allowed_roots"] == "ok"
+    assert body["checks"]["gnupg"] == "ok"
+
+
+def test_readyz_does_not_ask_for_createrepo_when_nothing_needs_it(
+    client: TestClient, apt_repository: Repository
+) -> None:
+    """An APT-only deployment has no reason to install it (13.3).
+
+    Reporting a tool this instance will never invoke as a problem would train
+    whoever watches this endpoint to ignore what it says.
+    """
+    body = client.get("/readyz").json()
+    assert body["status"] == "ok"
+    assert body["checks"]["createrepo_c"] == "not required: no RPM repositories"
+
+
+def test_readyz_is_degraded_when_an_rpm_repository_has_no_createrepo(
+    client: TestClient, rpm_repository: Repository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failure would otherwise surface as a failed job, hours later."""
+    import shutil
+
+    real_which = shutil.which
+    monkeypatch.setattr(
+        shutil, "which", lambda name, *a, **kw: None if "createrepo" in name else real_which(name)
+    )
+    response = client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["checks"]["createrepo_c"].startswith("missing")
+
+
+def test_readyz_is_ready_when_an_rpm_repository_has_createrepo(
+    client: TestClient, rpm_repository: Repository, fake_createrepo: FakeCreaterepo
+) -> None:
+    body = client.get("/readyz").json()
+    assert body["status"] == "ok"
+    assert body["checks"]["createrepo_c"] == "ok"
+
+
+def test_readyz_is_degraded_without_gnupg(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing can be signed without it, whichever format is served (10.5)."""
+    import shutil
+
+    real_which = shutil.which
+    monkeypatch.setattr(
+        shutil, "which", lambda name, *a, **kw: None if name == "gpg" else real_which(name)
+    )
+    response = client.get("/readyz")
+
+    assert response.status_code == 503
+    assert "missing" in response.json()["checks"]["gnupg"]
 
 
 def test_readyz_reports_degraded_when_a_root_is_missing(make_app: AppFactory) -> None:

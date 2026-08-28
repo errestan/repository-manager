@@ -97,6 +97,7 @@ class AuditAction(enum.StrEnum):
     SESSION_REVALIDATED = "session_revalidated"
     REPOSITORY_CREATE = "repository_create"
     DISTRIBUTION_ADD = "distribution_add"
+    VARIANT_ADD = "variant_add"
     KEY_GENERATE = "key_generate"
     KEY_IMPORT = "key_import"
     KEY_DELETE = "key_delete"
@@ -112,6 +113,7 @@ class AuditAction(enum.StrEnum):
             AuditAction.SESSION_REVALIDATED: "Session revalidated",
             AuditAction.REPOSITORY_CREATE: "Create repository",
             AuditAction.DISTRIBUTION_ADD: "Add distribution",
+            AuditAction.VARIANT_ADD: "Add variant",
             AuditAction.KEY_GENERATE: "Generate signing key",
             AuditAction.KEY_IMPORT: "Import signing key",
             AuditAction.KEY_DELETE: "Delete signing key",
