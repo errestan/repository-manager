@@ -1974,7 +1974,7 @@ requires-dist = [
     { name = "python-debian", specifier = ">=0.1.49" },
     { name = "python-multipart", specifier = ">=0.0.18" },
     { name = "rpmfile", specifier = ">=2.1" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.52" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
