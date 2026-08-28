@@ -360,11 +360,17 @@ async def test_a_later_upload_is_indexed_and_visible_to_dnf(
     )
     await session.flush()
 
-    key = published.signing_key
+    # Reloaded through the job's own loader rather than read off `published`.
+    # `signing_key` is not eagerly loaded by repository creation, and touching
+    # it here would be a lazy load on an async session -- MissingGreenlet, not
+    # merely slow.  Going through `load_for_publish` is also what regeneration
+    # actually does, which is the point of this test.
+    reloaded = await publishing.load_for_publish(session, published.id)
+    key = reloaded.signing_key
     assert key is not None
     publishing.write_rpm_metadata(
-        Path(published.root_path),
-        await publishing.build_rpm_plan(session, published),
+        Path(reloaded.root_path),
+        await publishing.build_rpm_plan(session, reloaded),
         signer=key_service.build_signer(settings, key),
         key_name=key.name,
         public_key=key.public_key_armored,
