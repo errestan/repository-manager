@@ -67,3 +67,29 @@ This project is GPL-3.0-or-later, so inbound licensing is permissive — MIT, BS
 LGPL and GPL-3 are all fine. The one thing that cannot be accepted is a **GPL-2-only**
 dependency, which is incompatible with GPL-3. `scripts/check_licences.py` runs in CI and will
 fail the build; please don't work around it without discussion.
+
+## Releasing
+
+The version lives in one place, `src/repository_manager/__about__.py`, and everything else
+is checked against it: the release workflow refuses a tag that does not match, and
+`tests/test_readme.py` fails if the README badge or the changelog fall behind.
+
+1. Bump `__version__`.
+2. Move the `Unreleased` changelog entries under a new `## [x.y.z] — YYYY-MM-DD` heading,
+   and update the link definitions at the bottom.
+3. Update the version badge at the top of `README.md`. Once the project is on PyPI this
+   becomes the self-updating badge instead, and stops needing step 3:
+
+   ```markdown
+   [![PyPI](https://img.shields.io/pypi/v/repository-manager)](https://pypi.org/project/repository-manager/)
+   ```
+
+4. Commit, then tag: `git tag -s vX.Y.Z && git push --tags`.
+
+The tag triggers `release.yml`, which builds the distributions, publishes to PyPI through
+Trusted Publishing (a protected environment, so it waits for a human), and creates the
+GitHub Release quoting that version's changelog section. `container.yml` publishes the
+image to GHCR on the same tag.
+
+**Pushing a tag publishes.** There is no dry run past that point — PyPI does not allow a
+version to be replaced.

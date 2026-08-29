@@ -1,12 +1,19 @@
 # Repository Manager
 
+[![CI](https://github.com/errestan/repository-manager/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/errestan/repository-manager/actions/workflows/ci.yml?query=branch%3Amain)
+[![Security](https://github.com/errestan/repository-manager/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/errestan/repository-manager/actions/workflows/security.yml?query=branch%3Amain)
+[![Container](https://github.com/errestan/repository-manager/actions/workflows/container.yml/badge.svg?branch=main)](https://github.com/errestan/repository-manager/actions/workflows/container.yml?query=branch%3Amain)
+[![Version 0.1.0, unreleased](https://img.shields.io/badge/version-0.1.0%20%E2%80%94%20unreleased-orange)](CHANGELOG.md)
+[![Python 3.11, 3.12, 3.13 and 3.14](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](pyproject.toml)
+[![Licence: GPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue)](LICENSE)
+
 A web interface for managing the contents of Linux package repositories (APT and RPM).
 
 Create repositories, upload and remove packages, and have the indices and GPG signatures
 regenerated correctly — without hand-running `apt-ftparchive` or `createrepo_c`.
 
 > **Status: 0.1.0, unreleased.** Every milestone in
-> ([`specification.md`](specification.md)) is implemented: configuration, migrations, the
+> [`specification.md`](specification.md) is implemented: configuration, migrations, the
 > accessible layout and sub-path handling (M1); APT repositories, signing keys, uploads and
 > index generation verified against a real `apt-get` (M2); LDAP login, sessions, CSRF, roles
 > and the audit log (M3); RPM repositories with variants and `repomd.xml` signing, verified
