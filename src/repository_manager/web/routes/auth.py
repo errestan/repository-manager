@@ -31,6 +31,7 @@ from repository_manager.web.deps import (
     Identity,
     db_session,
     get_authenticator,
+    get_limits,
     get_settings,
     get_templates,
     identity_of,
@@ -42,6 +43,23 @@ from repository_manager.web.templating import render
 log = get_logger(__name__)
 
 router = APIRouter(tags=["auth"])
+
+#: Shown when backoff or a lockout refuses an attempt (10.3).  Deliberately the
+#: same whether the username exists or not, and whether it was this username or
+#: this address that ran out of attempts: a message that distinguished them
+#: would confirm which accounts are real.
+THROTTLED = (
+    "Too many failed sign-in attempts. Wait {delay} and try again, or ask an administrator "
+    "if you think your account is locked out."
+)
+
+
+def _delay(seconds: int) -> str:
+    """A wait a person can read, rather than "wait 1 seconds"."""
+    if seconds < 60:
+        return f"{seconds} second{'' if seconds == 1 else 's'}"
+    minutes = -(-seconds // 60)
+    return f"{minutes} minute{'' if minutes == 1 else 's'}"
 
 
 def safe_next(request: Request, candidate: str | None) -> str | None:
@@ -125,6 +143,34 @@ async def login(
     # retyping it after a slip is pure friction.
     form = FormState(values={"username": username, "next": destination or ""})
     source = client_ip(request.scope)
+    limits = get_limits(request)
+
+    throttled = limits.login_allowed(username=username, client=source)
+    if not throttled.allowed:
+        # Checked before the directory is contacted, which is the point: a
+        # guesser must not be able to use this application as a way to hammer
+        # the directory, and a locked-out account should cost us nothing (10.3).
+        log.warning(
+            "login throttled",
+            username=username.strip()[:255],
+            client_ip=source,
+            retry_after=throttled.retry_after_seconds,
+        )
+        await audit.record(
+            session,
+            action=AuditAction.LOGIN,
+            actor=audit.ANONYMOUS_ACTOR,
+            actor_type=ActorType.USER,
+            outcome=AuditOutcome.DENIED,
+            source_ip=source,
+            details={
+                "username": username.strip()[:255],
+                "reason": "rate_limited",
+                "retry_after": throttled.retry_after_seconds,
+            },
+        )
+        form.add("username", THROTTLED.format(delay=_delay(throttled.retry_after_seconds)))
+        return _login_page(request, form, status_code=status.HTTP_429_TOO_MANY_REQUESTS)
 
     try:
         # ldap3 is synchronous, and a directory that has gone away will sit on
@@ -155,8 +201,14 @@ async def login(
             source_ip=source,
             details={"username": username.strip()[:255], "reason": type(exc).__name__},
         )
+        limits.login_failed(username=username, client=source)
         form.add("username", exc.user_message)
         return _login_page(request, form, status_code=status.HTTP_401_UNAUTHORIZED)
+
+    # Only consecutive failures count, so one correct password clears the slate
+    # for both keys: someone who mistyped twice this morning is not slowed down
+    # this afternoon (10.3).
+    limits.login_succeeded(username=username, client=source)
 
     # Session fixation: whatever session this browser arrived with is destroyed
     # before a new one is issued, so a token planted before login is worthless

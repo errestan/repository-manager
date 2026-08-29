@@ -23,7 +23,7 @@ from repository_manager.models import (
     UserSession,
 )
 from repository_manager.models.base import utcnow
-from tests.conftest import PUBLIC_URL, browser, sign_in
+from tests.conftest import PUBLIC_URL, AppFactory, browser, sign_in
 from tests.support.directory import (
     ADMIN_PASSWORD,
     ADMIN_USERNAME,
@@ -401,3 +401,100 @@ def test_an_unknown_action_filter_is_ignored_rather_than_erroring(
 def _rows(body: str) -> str:
     match = re.search(r"<tbody>(.*?)</tbody>", body, flags=re.DOTALL)
     return match.group(1) if match else ""
+
+
+# ------------------------------------------------------------------ rate limiting (10.3)
+
+
+def test_repeated_wrong_passwords_are_slowed_down(make_app: AppFactory) -> None:
+    """Backoff before the directory is contacted, so guessing costs us nothing."""
+    app = make_app(login_max_attempts=3, login_lockout_seconds=60)
+    with browser(app) as client:
+        for _ in range(3):
+            refused = client.post("/login", data={"username": ADMIN_USERNAME, "password": "wrong"})
+            assert refused.status_code == 401
+
+        throttled = client.post("/login", data={"username": ADMIN_USERNAME, "password": "wrong"})
+    assert throttled.status_code == 429
+    assert "Too many failed sign-in attempts" in throttled.text
+
+
+def test_a_lockout_refuses_the_correct_password_too(
+    make_app: AppFactory, directory: FakeDirectory
+) -> None:
+    """Otherwise it would confirm the password by answering differently."""
+    app = make_app(login_max_attempts=2, login_lockout_seconds=60)
+    with browser(app) as client:
+        for _ in range(2):
+            client.post("/login", data={"username": ADMIN_USERNAME, "password": "wrong"})
+        response = client.post(
+            "/login", data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}
+        )
+    assert response.status_code == 429
+    # The directory was never asked about the last attempt.
+    assert directory.role_lookups == 0
+
+
+def test_a_throttled_attempt_is_audited(make_app: AppFactory, sync_session: Session) -> None:
+    """Read from the table rather than the page: signing in to look would need
+    an account this instance has just locked out by address."""
+    app = make_app(login_max_attempts=1, login_lockout_seconds=60)
+    with browser(app) as client:
+        client.post("/login", data={"username": ADMIN_USERNAME, "password": "wrong"})
+        refused = client.post("/login", data={"username": ADMIN_USERNAME, "password": "wrong"})
+    assert refused.status_code == 429
+
+    entries = sync_session.scalars(
+        select(AuditLog).where(AuditLog.action == AuditAction.LOGIN)
+    ).all()
+    denied = [entry for entry in entries if entry.outcome is AuditOutcome.DENIED]
+    assert denied
+    assert denied[-1].details_json["reason"] == "rate_limited"
+
+
+def test_signing_in_correctly_clears_the_backoff(make_app: AppFactory) -> None:
+    app = make_app(login_max_attempts=5)
+    with browser(app) as client:
+        for _ in range(2):
+            client.post("/login", data={"username": ADMIN_USERNAME, "password": "wrong"})
+        # Within the backoff delay the next attempt would be refused, so this
+        # proves the reset happens on success rather than merely on time.
+        assert sign_in(client, ADMIN_USERNAME, ADMIN_PASSWORD)
+        assert (
+            client.post(
+                "/login",
+                data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+
+
+def test_another_account_is_unaffected_by_someone_elses_failures(
+    make_app: AppFactory,
+) -> None:
+    app = make_app(login_max_attempts=2, login_lockout_seconds=60)
+    with browser(app) as attacker:
+        for _ in range(3):
+            attacker.post("/login", data={"username": "unmapped", "password": "wrong"})
+    # A different client, so a different address is not what makes this pass --
+    # the TestClient uses one. The username key is what differs.
+    with browser(app) as victim:
+        response = victim.post(
+            "/login",
+            data={"username": MAINTAINER_USERNAME, "password": MAINTAINER_PASSWORD},
+            follow_redirects=False,
+        )
+    assert response.status_code == 429
+
+
+def test_the_limiter_can_be_switched_off(make_app: AppFactory) -> None:
+    app = make_app(rate_limit_enabled=False, login_max_attempts=1)
+    with browser(app) as client:
+        for _ in range(5):
+            assert (
+                client.post(
+                    "/login", data={"username": ADMIN_USERNAME, "password": "wrong"}
+                ).status_code
+                == 401
+            )

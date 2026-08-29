@@ -71,6 +71,12 @@ class JobContext:
 
 JobHandler = Callable[[JobContext], Awaitable[None]]
 
+#: Called as each job reaches a terminal state, with its type, that state and
+#: how long it ran (``None`` if it never started).  Exists so metrics can be
+#: recorded without this module knowing anything about metrics (13.3); a queue
+#: that imported the exporter would be a queue that could not run without it.
+JobObserver = Callable[[JobType, JobState, float | None], None]
+
 
 class JobQueue:
     """A pool of workers draining the ``job`` table."""
@@ -82,11 +88,13 @@ class JobQueue:
         handlers: Mapping[JobType, JobHandler] | None = None,
         *,
         poll_interval: float = POLL_INTERVAL_SECONDS,
+        observer: JobObserver | None = None,
     ) -> None:
         self.sessionmaker = sessionmaker
         self.settings = settings
         self.handlers: dict[JobType, JobHandler] = dict(handlers or {})
         self.poll_interval = poll_interval
+        self.observer = observer
 
         self._workers: list[asyncio.Task[None]] = []
         self._stopping = asyncio.Event()
@@ -301,6 +309,7 @@ class JobQueue:
     async def _finish(
         self, job_id: int, state: JobState, *, error: str | None, reset: bool = False
     ) -> None:
+        observed: tuple[JobType, float | None] | None = None
         async with self.sessionmaker() as session, session.begin():
             job = await session.get(Job, job_id)
             if job is None:  # pragma: no cover
@@ -315,6 +324,17 @@ class JobQueue:
                 job.finished_at = utcnow()
                 if state == JobState.SUCCEEDED:
                     job.progress = 100
+                observed = (job.type, job.duration_seconds)
+
+        # Outside the transaction, and never allowed to affect it: a failure in
+        # an observer is a monitoring problem, not a reason to lose the record
+        # of a job that really did finish.
+        if observed is not None and self.observer is not None:
+            job_type, seconds = observed
+            try:
+                self.observer(job_type, state, seconds)
+            except Exception:  # pragma: no cover - defensive
+                log.exception("job observer failed", job_id=job_id)
 
     # -- test and shutdown support ----------------------------------------
 

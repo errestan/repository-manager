@@ -164,6 +164,10 @@ class UploadOut(BaseModel):
     package: PackageOut
     created: bool
     job_id: int | None = None
+    #: Older versions retention removed to make room for this one (5.3).  Named
+    #: rather than counted: a pipeline that publishes nightly should be able to
+    #: see in its own log which builds stopped being available and when.
+    pruned: list[str] = Field(default_factory=list)
 
 
 class RemovalOut(BaseModel):

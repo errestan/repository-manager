@@ -106,7 +106,15 @@ class AuditAction(enum.StrEnum):
     KEY_DELETE = "key_delete"
     PACKAGE_UPLOAD = "package_upload"
     PACKAGE_REMOVE = "package_remove"
+    PACKAGE_PRUNE = "package_prune"
     REGENERATE = "regenerate"
+    RESCAN = "rescan"
+    SETTINGS_UPDATE = "settings_update"
+    RETENTION_APPLY = "retention_apply"
+    DISTRIBUTION_REMOVE = "distribution_remove"
+    VARIANT_REMOVE = "variant_remove"
+    REPOSITORY_DEREGISTER = "repository_deregister"
+    REPOSITORY_PURGE = "repository_purge"
     TOKEN_MINT = "token_mint"  # noqa: S105 - an action name, not a credential
     TOKEN_REVOKE = "token_revoke"  # noqa: S105 - an action name, not a credential
 
@@ -124,7 +132,15 @@ class AuditAction(enum.StrEnum):
             AuditAction.KEY_DELETE: "Delete signing key",
             AuditAction.PACKAGE_UPLOAD: "Upload package",
             AuditAction.PACKAGE_REMOVE: "Remove package",
+            AuditAction.PACKAGE_PRUNE: "Prune old version",
             AuditAction.REGENERATE: "Regenerate metadata",
+            AuditAction.RESCAN: "Rescan repository",
+            AuditAction.SETTINGS_UPDATE: "Change repository settings",
+            AuditAction.RETENTION_APPLY: "Apply retention",
+            AuditAction.DISTRIBUTION_REMOVE: "Remove distribution",
+            AuditAction.VARIANT_REMOVE: "Remove variant",
+            AuditAction.REPOSITORY_DEREGISTER: "Deregister repository",
+            AuditAction.REPOSITORY_PURGE: "Purge repository files",
             AuditAction.TOKEN_MINT: "Create API token",
             AuditAction.TOKEN_REVOKE: "Revoke API token",
         }[self]

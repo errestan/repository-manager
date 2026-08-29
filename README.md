@@ -5,16 +5,18 @@ A web interface for managing the contents of Linux package repositories (APT and
 Create repositories, upload and remove packages, and have the indices and GPG signatures
 regenerated correctly — without hand-running `apt-ftparchive` or `createrepo_c`.
 
-> **Status: pre-alpha.** The specification is complete
-> ([`specification.md`](specification.md)). **M1–M5 are done**: configuration, database and
-> migrations, the accessible layout, health probes and sub-path/proxy handling (M1); APT
-> repository creation, signing keys, upload and removal, pure-Python index generation and
-> the job queue, verified against a real `apt-get` (M2); LDAP login, server-side sessions,
-> CSRF, role mapping and the audit log (M3); RPM repositories with variants, `createrepo_c`
-> indexing and `repomd.xml` signing, verified against a real `dnf` (M4); and scoped API
-> tokens with a JSON REST API and OpenAPI schema (M5).
-> Still missing: rate limiting, retention enforcement, rescan and metrics (M6).
-> Not usable in production.
+> **Status: 0.1.0, unreleased.** Every milestone in
+> ([`specification.md`](specification.md)) is implemented: configuration, migrations, the
+> accessible layout and sub-path handling (M1); APT repositories, signing keys, uploads and
+> index generation verified against a real `apt-get` (M2); LDAP login, sessions, CSRF, roles
+> and the audit log (M3); RPM repositories with variants and `repomd.xml` signing, verified
+> against a real `dnf` (M4); scoped API tokens, a JSON REST API and OpenAPI (M5); and
+> retention, rescan, rate limiting, metrics and the release pipeline (M6).
+>
+> It has not been run in anger anywhere, and one thing the specification asks for has not
+> been done: a manual screen-reader pass (see
+> [`docs/accessibility.md`](docs/accessibility.md)). Read
+> [the changelog's known limitations](CHANGELOG.md) before deploying it.
 
 ## Features
 
@@ -28,8 +30,14 @@ regenerated correctly — without hand-running `apt-ftparchive` or `createrepo_c
 - **Scoped API tokens** so CI can publish packages without an interactive login — limited to
   chosen repositories, expiring by default, and never able to do more than the account that
   minted them. See [Publishing from CI](docs/api.md).
-- **Accessible** — WCAG 2.2 AA, screen-reader tested, works without JavaScript, follows your
-  system light/dark preference.
+- **Retention** — keep every version, or the newest few per package, per architecture, per
+  target, pruned using each format's own version ordering.
+- **Drift detection** — a rescan that re-hashes what is on disk, compares it against the
+  database, and reports what differs without changing anything.
+- **Operable** — an append-only audit log, background jobs with progress and logs, health
+  probes, optional Prometheus metrics, and in-process rate limiting.
+- **Accessible** — built to WCAG 2.2 AA and verified with `axe-core` on every commit, works
+  without JavaScript, follows your system light/dark preference.
 
 ## Requirements
 
@@ -119,7 +127,9 @@ terminate TLS. Put nginx (or Apache) in front of it: the proxy serves the reposi
 static files and handles certificates, while this application manages what is in that tree.
 It runs happily at a domain root or at a sub-path such as `https://packages.example.com/manage/`.
 
-See [`specification.md`](specification.md) §4.4 and §13.5 for reference configuration.
+See [`specification.md`](specification.md) §4.4 and §13.5 for reference configuration, and
+[`docs/deployment.md`](docs/deployment.md) for a working nginx file, authentication setup,
+retention, rate limiting and metrics.
 
 ## Licence
 

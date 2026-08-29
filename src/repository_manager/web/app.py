@@ -27,15 +27,18 @@ from repository_manager.config import Settings
 from repository_manager.db import create_engine, create_sessionmaker
 from repository_manager.jobs.queue import JobQueue
 from repository_manager.logging import configure_logging, get_logger
-from repository_manager.services import publishing
+from repository_manager.security.ratelimit import Limits
+from repository_manager.services import publishing, rescan
 from repository_manager.web import problems
 from repository_manager.web.deps import LoginRequired, is_api_request, security_gate
+from repository_manager.web.metrics import Metrics, MetricsMiddleware, snapshot
 from repository_manager.web.middleware import (
     ProxyHeadersMiddleware,
     RequestContextMiddleware,
     SecurityHeadersMiddleware,
 )
 from repository_manager.web.routes import (
+    administration,
     api,
     audit,
     auth,
@@ -79,8 +82,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The worker pool lives for exactly as long as the application (6).  Starting
     # it here also runs restart recovery, which is what re-queues a regeneration
     # that was interrupted by the previous shutdown.
-    queue = JobQueue(sessionmaker, settings)
+    metrics: Metrics | None = app.state.metrics
+    queue = JobQueue(
+        sessionmaker,
+        settings,
+        observer=None if metrics is None else metrics.record_job,
+    )
     publishing.register_handlers(queue)
+    rescan.register_handlers(queue)
     app.state.queue = queue
     await queue.start()
 
@@ -127,6 +136,20 @@ def create_app(settings: Settings, *, configure_logs: bool = True) -> FastAPI:
     )
     app.state.settings = settings
     app.state.templates = templates
+    # Counters, so they have to outlive the request that increments them (10.3).
+    app.state.limits = Limits(
+        enabled=settings.rate_limit_enabled,
+        login_max_attempts=settings.login_max_attempts,
+        login_lockout_seconds=settings.login_lockout_seconds,
+        upload_burst=settings.upload_burst,
+        upload_per_minute=settings.upload_rate_per_minute,
+        credential_burst=settings.credential_failure_burst,
+        credential_per_minute=settings.credential_failure_rate_per_minute,
+    )
+    # Built here rather than lazily, so an instance asking for metrics without
+    # the optional dependency fails at startup with something actionable rather
+    # than at the first scrape, weeks later, into nobody's terminal (13.3).
+    app.state.metrics = Metrics() if settings.metrics_enabled else None
     # Token owners' directory roles, remembered for the session revalidation
     # interval (7.4).  Held on the application rather than built per request,
     # which is the whole point of it.
@@ -137,6 +160,10 @@ def create_app(settings: Settings, *, configure_logs: bool = True) -> FastAPI:
 
     # Applied bottom-up: proxy resolution must run before anything reads the
     # scheme, the client IP, or the mount prefix.
+    if app.state.metrics is not None:
+        # Innermost of the four, so the duration it records is the application's
+        # own work rather than the time the outer middleware spend on headers.
+        app.add_middleware(MetricsMiddleware, metrics=app.state.metrics)
     app.add_middleware(SecurityHeadersMiddleware, settings=settings)
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(ProxyHeadersMiddleware, settings=settings)
@@ -150,14 +177,40 @@ def create_app(settings: Settings, *, configure_logs: bool = True) -> FastAPI:
     app.include_router(jobs.router)
     app.include_router(audit.router)
     app.include_router(tokens.router)
+    # Before the browsing routes: `/repositories/{slug}/settings` and its
+    # siblings must be matched before `/repositories/{slug}` swallows them.
+    app.include_router(administration.router)
     app.include_router(repositories.router)
     app.include_router(api.router)
     if settings.api_docs_enabled:
         app.include_router(reference.router)
+    if settings.metrics_enabled:
+        _register_metrics(app)
 
     app.openapi = _openapi_of(app)  # type: ignore[method-assign]
     _register_error_handlers(app, templates)
     return app
+
+
+def _register_metrics(app: FastAPI) -> None:
+    """Serve the Prometheus exposition at ``/metrics`` (13.3, 8.1).
+
+    Registered only when enabled, so an instance that does not export metrics
+    has no such route rather than a route that refuses -- one fewer place for
+    the switch to be read and got wrong.
+
+    Anonymous by design: a scraper has no session and no token.  Which is why
+    enabling it is a decision about who can reach the port, and why the
+    deployment documentation carries an nginx rule that keeps it off the public
+    listener.
+    """
+
+    @app.get("/metrics", include_in_schema=False, name="metrics")
+    async def metrics_endpoint(request: Request) -> Response:
+        body, content_type = await snapshot(
+            request.app.state.metrics, request.app.state.sessionmaker
+        )
+        return Response(content=body, media_type=content_type)
 
 
 def _openapi_of(app: FastAPI) -> Callable[[], dict[str, Any]]:

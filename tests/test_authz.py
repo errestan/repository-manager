@@ -76,6 +76,10 @@ ENDPOINTS = [
     Endpoint("POST", "/repositories/internal/packages/upload", Role.MAINTAINER),
     Endpoint("POST", "/repositories/internal/packages/1/delete", Role.MAINTAINER),
     Endpoint("POST", "/repositories/internal/regenerate", Role.MAINTAINER),
+    # Changes nothing, so it sits with the package operations rather than with
+    # the administration below: the person who notices a package is missing is
+    # the person who publishes them (5.4).
+    Endpoint("POST", "/repositories/internal/rescan", Role.MAINTAINER),
     # -- admin: the shape of the repository, and the keys
     Endpoint("GET", "/repositories/new", Role.ADMIN),
     Endpoint("POST", "/repositories/new", Role.ADMIN),
@@ -86,6 +90,13 @@ ENDPOINTS = [
     # handler decide the route does not apply to this format.
     Endpoint("GET", "/repositories/internal/variants", Role.ADMIN),
     Endpoint("POST", "/repositories/internal/variants", Role.ADMIN),
+    Endpoint("GET", "/repositories/internal/settings", Role.ADMIN),
+    Endpoint("POST", "/repositories/internal/settings", Role.ADMIN),
+    Endpoint("POST", "/repositories/internal/retention", Role.ADMIN),
+    Endpoint("POST", "/repositories/internal/distributions/1/delete", Role.ADMIN),
+    Endpoint("POST", "/repositories/internal/variants/1/delete", Role.ADMIN),
+    Endpoint("GET", "/repositories/internal/delete", Role.ADMIN),
+    Endpoint("POST", "/repositories/internal/delete", Role.ADMIN),
     Endpoint("POST", "/keys", Role.ADMIN),
     Endpoint("POST", "/keys/test-key/delete", Role.ADMIN),
 ]
@@ -238,6 +249,8 @@ def _shape(path: str) -> str:
         "/repositories/internal": "/repositories/{slug}",
         "/keys/test-key": "/keys/{name}",
         "/packages/1/delete": "/packages/{publication_id}/delete",
+        "/distributions/1/delete": "/distributions/{distribution_id}/delete",
+        "/variants/1/delete": "/variants/{variant_id}/delete",
         "/api/v1/repositories/{slug}/packages/1": (
             "/api/v1/repositories/{slug}/packages/{publication_id}"
         ),

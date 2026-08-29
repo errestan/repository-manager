@@ -10,6 +10,7 @@ token with it.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -887,3 +888,147 @@ def test_an_endpoint_with_no_token_requirement_is_marked_anonymous() -> None:
         {"paths": {"/x": {"get": {"summary": "Read", "responses": {}}}}}
     )
     assert endpoints[0].authenticated is False
+
+
+# ------------------------------------------------------------------ retention (5.3)
+
+
+def test_an_upload_reports_what_retention_removed(
+    token_client: TestClient, admin_client: TestClient, published: str, tmp_path: Path
+) -> None:
+    """A nightly pipeline should see in its own log which builds went away."""
+    admin_client.post(
+        f"/repositories/{published}/settings",
+        data={
+            "name": "Internal APT",
+            "description": "",
+            "origin": "",
+            "label": "",
+            "signing_key_id": _first_key_id(admin_client, published),
+            "retention": "count",
+            "retention_count": "1",
+        },
+    )
+    for version in ("1.0-1", "1.1-1"):
+        response = _upload(
+            token_client,
+            published,
+            build_deb(DebSpec(name="alpha", version=version), tmp_path / f"a{version}.deb"),
+        )
+        assert response.status_code == 201, response.text
+
+    assert response.json()["pruned"] == ["alpha 1.0-1 (amd64) from bookworm/main"]
+
+
+def test_nothing_is_pruned_when_every_version_is_kept(
+    token_client: TestClient, published: str, tmp_path: Path
+) -> None:
+    for version in ("1.0-1", "1.1-1"):
+        response = _upload(
+            token_client,
+            published,
+            build_deb(DebSpec(name="alpha", version=version), tmp_path / f"a{version}.deb"),
+        )
+    assert response.json()["pruned"] == []
+
+
+def _first_key_id(client: TestClient, slug: str) -> str:
+    match = re.search(r'<option value="(\d+)"', client.get(f"/repositories/{slug}/settings").text)
+    assert match, "no signing key offered"
+    return match.group(1)
+
+
+# ------------------------------------------------------------------ rate limiting (10.3)
+
+
+def test_a_flood_of_rejected_tokens_is_throttled(
+    make_app: AppFactory, apt_repository: Repository
+) -> None:
+    """Guessing a token must cost the guesser, not just this database."""
+    app = make_app(credential_failure_burst=2, credential_failure_rate_per_minute=1)
+    with browser(app) as client:
+        statuses = [
+            client.get(
+                f"{API}/repositories",
+                headers={"authorization": f"Bearer rmt_{'x' * 43}"},
+            ).status_code
+            for _ in range(4)
+        ]
+    assert statuses[:2] == [401, 401]
+    assert statuses[-1] == 429
+
+
+def test_the_throttled_answer_is_a_problem_document(
+    make_app: AppFactory, apt_repository: Repository
+) -> None:
+    app = make_app(credential_failure_burst=1, credential_failure_rate_per_minute=1)
+    with browser(app) as client:
+        client.get(f"{API}/repositories", headers={"authorization": f"Bearer rmt_{'x' * 43}"})
+        response = client.get(
+            f"{API}/repositories", headers={"authorization": f"Bearer rmt_{'x' * 43}"}
+        )
+    assert response.status_code == 429
+    assert response.headers["content-type"].startswith(PROBLEM_MEDIA_TYPE)
+    body = response.json()
+    assert body["type"] == f"{TYPE_PREFIX}rate-limited"
+    assert int(response.headers["retry-after"]) >= 1
+    assert body["retry_after"] >= 1
+
+
+def test_a_good_token_is_never_slowed_by_someone_elses_guessing(
+    make_app: AppFactory, sync_session: Session, apt_repository: Repository
+) -> None:
+    """Failures are what is counted, so a working pipeline never meets the limit."""
+    app = make_app(credential_failure_burst=1, credential_failure_rate_per_minute=1)
+    token = issue_token(sync_session)
+    with browser(app) as client:
+        for _ in range(3):
+            client.get(f"{API}/repositories", headers={"authorization": f"Bearer rmt_{'x' * 43}"})
+        for _ in range(10):
+            assert client.get(f"{API}/repositories", headers=token.header).status_code == 200
+
+
+def test_uploads_are_throttled_per_token(
+    make_app: AppFactory,
+    scratch_keyring: Keyring,
+    signing_key: SigningKey,
+    sync_session: Session,
+    repository_root: Path,
+    tmp_path: Path,
+) -> None:
+    app = make_app(gnupghome=str(scratch_keyring.home), upload_burst=1, upload_rate_per_minute=1)
+    token = issue_token(sync_session)
+    with browser(app) as admin:
+        sign_in(admin, fake_directory.ADMIN_USERNAME, fake_directory.ADMIN_PASSWORD)
+        created = admin.post(
+            "/repositories/new",
+            data={
+                "name": "Throttled",
+                "root_path": str(repository_root / "throttled"),
+                "signing_key_id": str(signing_key.id),
+                "retention": "all",
+                "format": "apt",
+                "codename": "bookworm",
+                "components": "main",
+                "architectures": "amd64",
+            },
+            follow_redirects=False,
+        )
+        slug = str(created.headers["location"]).rsplit("/", 1)[-1]
+
+    with browser(app) as pipeline:
+        pipeline.headers.update(token.header)
+        statuses = []
+        for index in range(3):
+            deb = build_deb(
+                DebSpec(name="alpha", version=f"1.{index}-1"), tmp_path / f"a{index}.deb"
+            )
+            statuses.append(
+                pipeline.post(
+                    f"{API}/repositories/{slug}/packages",
+                    data={"distribution": "bookworm", "component": "main"},
+                    files={"file": (deb.name, deb.read_bytes())},
+                ).status_code
+            )
+    assert statuses[0] == 201
+    assert 429 in statuses[1:]

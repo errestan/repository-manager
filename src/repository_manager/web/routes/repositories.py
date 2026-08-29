@@ -40,7 +40,7 @@ from repository_manager.models import (
     SigningKey,
 )
 from repository_manager.security.paths import resolve_within_roots
-from repository_manager.services import audit, publishing
+from repository_manager.services import audit, publishing, retention
 from repository_manager.services import packages as package_service
 from repository_manager.services import repositories as repository_service
 from repository_manager.services.packages import ARCH_ALL, UploadError
@@ -55,9 +55,11 @@ from repository_manager.web.deps import (
     MAX_FORM_FILES,
     Identity,
     db_session,
+    get_limits,
     get_queue,
     get_settings,
     get_templates,
+    record_upload,
     require_admin,
     require_maintainer,
 )
@@ -115,7 +117,13 @@ async def _load_active(session: AsyncSession) -> list[Repository]:
     return list((await session.execute(statement)).scalars().all())
 
 
-async def _load(session: AsyncSession, slug: str) -> Repository:
+async def load_repository(session: AsyncSession, slug: str) -> Repository:
+    """One active repository by slug, with its publication targets loaded.
+
+    Public rather than private because the administration routes need exactly
+    this and duplicating the eager loads is how two modules end up disagreeing
+    about which relationships are safe to touch in a template.
+    """
     repository = await session.scalar(
         select(Repository)
         .where(Repository.slug == slug, Repository.deregistered_at.is_(None))
@@ -126,7 +134,7 @@ async def _load(session: AsyncSession, slug: str) -> Repository:
     return repository
 
 
-def _root_of(repository: Repository, settings: Settings) -> Path:
+def root_of(repository: Repository, settings: Settings) -> Path:
     """The repository's root, re-proved to be inside the sandbox (10.4)."""
     return resolve_within_roots(Path(repository.root_path), settings.allowed_roots)
 
@@ -458,7 +466,7 @@ async def repository_create(
 async def repository_detail(
     request: Request, slug: str, session: Annotated[AsyncSession, Depends(db_session)]
 ) -> Response:
-    repository = await _load(session, slug)
+    repository = await load_repository(session, slug)
     settings = get_settings(request)
     recent = list(
         (
@@ -526,7 +534,7 @@ async def repository_packages(
     arch: str = "",
     page: int = 1,
 ) -> Response:
-    repository = await _load(session, slug)
+    repository = await load_repository(session, slug)
     query = q.strip()[:200]
     architecture = arch.strip()[:32]
     page = max(1, page)
@@ -665,7 +673,7 @@ def _upload_context(request: Request, repository: Repository, form: FormState) -
 async def repository_upload_form(
     request: Request, slug: str, session: Annotated[AsyncSession, Depends(db_session)]
 ) -> Response:
-    repository = await _load(session, slug)
+    repository = await load_repository(session, slug)
     return render(
         get_templates(request),
         request,
@@ -691,7 +699,7 @@ async def repository_upload(
     queue: Annotated[JobQueue, Depends(get_queue)],
     identity: Annotated[Identity, Depends(require_maintainer)],
 ) -> Response:
-    repository = await _load(session, slug)
+    repository = await load_repository(session, slug)
     settings = get_settings(request)
     form = FormState()
 
@@ -703,6 +711,18 @@ async def repository_upload(
             "repositories/upload.html.j2",
             _upload_context(request, repository, form),
             status_code=code,
+        )
+
+    # Checked before the body is read, so a caller over the limit is turned away
+    # without this process spooling their upload to disk first (10.3).
+    allowance = get_limits(request).upload_allowed(
+        client=client_ip(request.scope), actor=identity.user_dn
+    )
+    if not allowance.allowed:
+        return reject(
+            "Too many uploads from here just now. Wait "
+            f"{allowance.retry_after_seconds} seconds and try again.",
+            code=status.HTTP_429_TOO_MANY_REQUESTS,
         )
 
     try:
@@ -741,7 +761,7 @@ async def repository_upload(
             # Staged while the form context is still open: closing it discards
             # the spooled upload, so the copy has to happen before then.
             staged = await package_service.stage_upload(
-                _root_of(repository, settings),
+                root_of(repository, settings),
                 _chunks(upload),
                 max_bytes=settings.max_upload_bytes,
             )
@@ -771,6 +791,7 @@ async def repository_upload(
     except UploadError as exc:
         return reject(str(exc), code=exc.status_code)
 
+    record_upload(request, outcome.package.size)
     await audit.record(
         session,
         action=AuditAction.PACKAGE_UPLOAD,
@@ -788,7 +809,21 @@ async def repository_upload(
             "created": outcome.created,
         },
     )
+    pruned: list[retention.Pruned] = []
     if outcome.created:
+        # Pruned before the rebuild is queued, so one regeneration publishes the
+        # addition and the removals together rather than briefly offering an
+        # index that lists a package already deleted from the pool (5.3).
+        pruned = await retention.enforce_for(
+            session, settings, repository, name=outcome.package.name
+        )
+        await retention.record(
+            session,
+            repository,
+            pruned,
+            actor=identity.user_dn,
+            source_ip=client_ip(request.scope),
+        )
         await publishing.request_regeneration(session, queue, repository)
     # Commit before waking a worker: the job row has to be visible to the other
     # connection that will claim it.
@@ -797,7 +832,7 @@ async def repository_upload(
 
     return RedirectResponse(
         request.url_for("repository_packages", slug=repository.slug).include_query_params(
-            published=outcome.package.id
+            published=outcome.package.id, pruned=len(pruned)
         ),
         status_code=status.HTTP_303_SEE_OTHER,
     )
@@ -816,7 +851,7 @@ async def repository_package_delete(
     queue: Annotated[JobQueue, Depends(get_queue)],
     identity: Annotated[Identity, Depends(require_maintainer)],
 ) -> Response:
-    repository = await _load(session, slug)
+    repository = await load_repository(session, slug)
     settings = get_settings(request)
     try:
         publication = await package_service.load_publication(session, repository, publication_id)
@@ -861,7 +896,7 @@ async def repository_regenerate(
     queue: Annotated[JobQueue, Depends(get_queue)],
     identity: Annotated[Identity, Depends(require_maintainer)],
 ) -> Response:
-    repository = await _load(session, slug)
+    repository = await load_repository(session, slug)
     job_id = await publishing.request_regeneration(
         session, queue, repository, actor=identity.user_dn
     )
@@ -890,7 +925,7 @@ async def repository_regenerate(
 async def repository_distributions(
     request: Request, slug: str, session: Annotated[AsyncSession, Depends(db_session)]
 ) -> Response:
-    repository = await _load(session, slug)
+    repository = await load_repository(session, slug)
     if repository.type is not RepositoryType.APT:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="That repository has no distributions"
@@ -923,7 +958,7 @@ async def repository_distribution_add(
     architectures: Annotated[str, Form()] = "",
     description: Annotated[str, Form()] = "",
 ) -> Response:
-    repository = await _load(session, slug)
+    repository = await load_repository(session, slug)
     form = FormState(
         values={
             "codename": codename,
@@ -993,7 +1028,7 @@ async def repository_distribution_add(
 async def repository_variants(
     request: Request, slug: str, session: Annotated[AsyncSession, Depends(db_session)]
 ) -> Response:
-    repository = await _load(session, slug)
+    repository = await load_repository(session, slug)
     if repository.type is not RepositoryType.RPM:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="That repository has no variants"
@@ -1020,7 +1055,7 @@ async def repository_variant_add(
     variant_name: Annotated[str, Form()] = "",
     variant_arch: Annotated[str, Form()] = "",
 ) -> Response:
-    repository = await _load(session, slug)
+    repository = await load_repository(session, slug)
     if repository.type is not RepositoryType.RPM:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="That repository has no variants"

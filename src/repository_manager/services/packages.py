@@ -289,8 +289,16 @@ async def _republish(
         return UploadOutcome(package=existing, created=False)
 
     # Same bytes, new target: one stored file, a second publication (9).
-    session.add(
-        PackagePublication(package_id=existing.id, component_id=component_id, variant_id=variant_id)
+    #
+    # Appended to the relationship rather than added as a bare row with a
+    # foreign key.  Both write the same row, but only this keeps the loaded
+    # `package.publications` collection correct -- and `remove_publication`
+    # reads exactly that collection to decide whether the pool file is still
+    # referenced.  Adding the row alone left the collection one short, so a
+    # removal later in the same session would delete a file another target was
+    # still publishing.
+    existing.publications.append(
+        PackagePublication(component_id=component_id, variant_id=variant_id)
     )
     await session.flush()
     return UploadOutcome(package=existing, created=True)

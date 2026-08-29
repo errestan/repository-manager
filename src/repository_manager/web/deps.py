@@ -37,6 +37,7 @@ from repository_manager.jobs.queue import JobQueue
 from repository_manager.logging import get_logger
 from repository_manager.models import ApiToken, Role, TokenScope, UserSession
 from repository_manager.models.base import utcnow
+from repository_manager.security.ratelimit import Decision, Limits
 from repository_manager.services import tokens as token_service
 from repository_manager.web.middleware import client_ip, route_path
 from repository_manager.web.problems import ApiError
@@ -85,6 +86,10 @@ WWW_AUTHENTICATE = 'Bearer realm="repository-manager"'
 CREDENTIAL_REJECTED = (
     "That API token is not valid. It may have been revoked, or it may have expired; "
     "mint a replacement on the tokens page."
+)
+
+TOO_MANY_CREDENTIALS = (
+    "Too many rejected API tokens from here. Check the token you are sending, then retry."
 )
 
 
@@ -228,6 +233,22 @@ def get_authenticator(request: Request) -> Authenticator:
     return authenticator
 
 
+def get_limits(request: Request) -> Limits:
+    limits: Limits = request.app.state.limits
+    return limits
+
+
+def record_upload(request: Request, size: int) -> None:
+    """Count accepted upload bytes, when metrics are enabled (13.3).
+
+    A function rather than a getter because most callers only ever want to
+    record: handing them the exporter would invite reaching for the rest of it.
+    """
+    metrics = request.app.state.metrics
+    if metrics is not None:
+        metrics.record_upload(size)
+
+
 def get_role_cache(request: Request) -> RoleCache:
     cache: RoleCache = request.app.state.role_cache
     return cache
@@ -345,11 +366,23 @@ async def _api_gate(request: Request, session: AsyncSession) -> None:
 
     record = await token_service.authenticate(session, presented)
     if record is None:
+        # Counted only on a *failure*, so a busy pipeline holding a good token
+        # never meets this limit however fast it goes (10.3).  The allowance is
+        # consumed here rather than checked first: a caller that has already
+        # exhausted it gets 429 on the next attempt, not on this one, which
+        # keeps the check one branch instead of two.
+        source = client_ip(request.scope)
+        decision = get_limits(request).credential_failure_allowed(
+            client=source, prefix=token_service.prefix_of(presented)
+        )
         log.info(
             "api token rejected",
             path=request.url.path,
-            client_ip=client_ip(request.scope),
+            client_ip=source,
+            rate_limited=not decision.allowed,
         )
+        if not decision.allowed:
+            raise _too_many(request, TOO_MANY_CREDENTIALS, decision)
         raise ApiError(
             status.HTTP_401_UNAUTHORIZED,
             CREDENTIAL_REJECTED,
@@ -362,6 +395,24 @@ async def _api_gate(request: Request, session: AsyncSession) -> None:
     # request is not the token working.  The refusal itself is logged above.
     token_service.touch(record)
     request.state.token = TokenIdentity.of(record)
+
+
+def _too_many(request: Request, detail: str, decision: Decision) -> ApiError:
+    """A 429 that says how long to wait, for the API's problem documents (10.3)."""
+    log.warning(
+        "rate limited",
+        path=request.url.path,
+        client_ip=client_ip(request.scope),
+        retry_after=decision.retry_after_seconds,
+    )
+    return ApiError(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        detail,
+        slug="rate-limited",
+        title="Too many requests",
+        headers={"retry-after": str(decision.retry_after_seconds)},
+        retry_after=decision.retry_after_seconds,
+    )
 
 
 async def security_gate(

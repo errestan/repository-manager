@@ -332,6 +332,9 @@ def management_pages(live_server: str) -> list[str]:
         f"{live_server}/jobs/2",
         f"{live_server}/audit",
         f"{live_server}/tokens",
+        f"{live_server}/repositories/internal/settings",
+        f"{live_server}/repositories/internal/delete",
+        f"{live_server}/repositories/el9/settings",
     ]
 
 

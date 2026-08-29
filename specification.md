@@ -272,6 +272,17 @@ the newest N are pruned from that publication target, using the format's own ver
 ordering (§4.1, §4.2). Pruning is recorded in the audit log. A pool file is only deleted
 once no publication target references it.
 
+Versions are counted per package name, **per architecture**, per publication target. The
+architecture is not mentioned above but is load-bearing: without it, a repository publishing
+`amd64` and `arm64` with N=3 would keep three files between them, and the current `arm64`
+build would be deleted because three `amd64` builds happened to be newer. Architecture is
+already part of what this application treats as the same package (§5.1), so it is part of
+the retention group too.
+
+A publish prunes only the package name it published. Sweeping the whole repository would
+make one person's upload delete another person's package with no explanation; clearing that
+backlog is the settings page's explicit action.
+
 Lowering N on an existing repository does not retroactively prune; it takes effect on the
 next publish for each affected package. The repository settings page shows how many packages
 would be pruned and offers an explicit "apply retention now" action.
@@ -466,9 +477,18 @@ Private key material is **never** stored in the database — it lives in the Gnu
 
 ### 10.3 Rate limiting
 
-- Login: per-username and per-IP, with exponential backoff and a temporary lockout.
-- Token authentication failures and upload endpoints: per-token and per-IP limits.
+- Login: per-username and per-IP, with exponential backoff and a temporary lockout. The first
+  two failures are counted without any delay — the delay is aimed at a program making
+  thousands of guesses, and a person who mistypes a password and retries immediately should
+  not be told to wait.
+- Token authentication failures and upload endpoints: per-token and per-IP limits, with
+  separate allowances so a credential guesser and a busy pipeline cannot exhaust each
+  other's.
 - Implemented in-process (token bucket); documented as per-instance, not cluster-wide.
+- Both keys are consulted and the longer wait wins, so a lockout cannot be escaped by
+  changing address or by changing username.
+- The tracked key space is bounded: the key is chosen by the caller, so an unbounded map
+  would be the denial of service the limiter exists to prevent.
 
 ### 10.4 Filesystem safety
 
@@ -586,6 +606,12 @@ Key settings:
 | `REPOMAN_TOKEN_MAX_LIFETIME_DAYS` | `365` | Ceiling on token expiry |
 | `REPOMAN_TOKEN_DEFAULT_LIFETIME_DAYS` | `90` | What the token form offers when nobody chooses (§7.4); must not exceed the ceiling |
 | `REPOMAN_API_DOCS_ENABLED` | `true` | Serve the OpenAPI schema and the reference page (§8.2); the API itself is unaffected |
+| `REPOMAN_RATE_LIMIT_ENABLED` | `true` | Apply the in-process limits of §10.3 |
+| `REPOMAN_LOGIN_MAX_ATTEMPTS` | `5` | Consecutive failed logins, per username *and* per address, before a lockout |
+| `REPOMAN_LOGIN_LOCKOUT_SECONDS` | `900` | How long that lockout lasts |
+| `REPOMAN_UPLOAD_BURST` / `_RATE_PER_MINUTE` | `20` / `60` | Upload allowance, per token or user and per address |
+| `REPOMAN_CREDENTIAL_FAILURE_BURST` / `_RATE_PER_MINUTE` | `10` / `30` | Rejected API tokens before a source is throttled |
+| `REPOMAN_METRICS_ENABLED` | `false` | Serve Prometheus metrics at `/metrics` (§13.3); needs the `metrics` extra |
 | `REPOMAN_LOG_FORMAT` | `json` | `json` or `console` |
 | `REPOMAN_ENV` | `production` | Guards debug features |
 

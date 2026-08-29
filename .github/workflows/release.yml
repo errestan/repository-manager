@@ -57,3 +57,33 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  announce:
+    name: Publish the GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      # Creating a release writes to the repository; nothing else here does.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      # Quoted from CHANGELOG.md rather than generated from commit subjects a
+      # second time: two descriptions of one release drift, and the one people
+      # read should be the one that was written on purpose.
+      - name: Extract the release notes
+        run: |
+          python scripts/changelog_section.py "${GITHUB_REF_NAME}" > notes.md
+          cat notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file notes.md

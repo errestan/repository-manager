@@ -15,6 +15,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.templating import Jinja2Templates
 
+from repository_manager.__about__ import __version__
 from repository_manager.web.deps import identity_of
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
@@ -101,6 +102,9 @@ def render(
         # instance with the documentation switched off, which is a broken page
         # rather than a missing link.
         "api_docs": bool(request.app.state.settings.api_docs_enabled),
+        # In the footer as well as at /healthz (14.4): a bug report that names
+        # a version is worth several that do not.
+        "version": __version__,
         **(context or {}),
     }
     return templates.TemplateResponse(

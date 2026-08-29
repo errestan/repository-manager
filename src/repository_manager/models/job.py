@@ -26,10 +26,18 @@ LOG_EXCERPT_LIMIT = 16_384
 
 class JobType(enum.StrEnum):
     REGENERATE_METADATA = "regenerate_metadata"
+    #: Reconciles the database against what is on disk and reports what differs
+    #: (5.4).  A job rather than a request because a large repository is a lot
+    #: of hashing, and read-only because the right response to drift depends on
+    #: which direction it went.
+    RESCAN = "rescan"
 
     @property
     def label(self) -> str:
-        return {JobType.REGENERATE_METADATA: "Regenerate metadata"}[self]
+        return {
+            JobType.REGENERATE_METADATA: "Regenerate metadata",
+            JobType.RESCAN: "Rescan repository",
+        }[self]
 
 
 class JobState(enum.StrEnum):

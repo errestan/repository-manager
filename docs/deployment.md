@@ -341,6 +341,112 @@ The reference page is rendered by this application rather than by Swagger UI or 
 of those fetch their assets from a public CDN, and the Content-Security-Policy allows no
 remote origins — they would render blank.
 
+## Retention
+
+A repository keeps every version of every package unless it is told otherwise. When it is,
+the count is per package name, per architecture, per publication target — so a repository
+publishing `amd64` and `arm64` with "keep 3" keeps three of each, not three between them.
+
+Two things surprise people, both deliberate:
+
+**Lowering the count does not prune anything by itself.** It takes effect on the next
+publish of each affected package. The settings page shows exactly what a repository is
+carrying beyond its policy and offers a button to clear it, because deleting packages that
+clients can install today is a decision rather than a consequence of editing a number.
+
+**A publish prunes only the package it published.** Uploading `hello` will never delete an
+old build of `world`, even if `world` is over the limit. Sweeping everything on every upload
+would make one person's routine action delete another person's package.
+
+Ordering is the format's own — Debian's for `.deb`, rpm's for `.rpm` — so `1.10` is newer
+than `1.9` and `2.0~rc1` is older than `2.0`. Pruning is recorded in the audit log, one
+entry per publication removed.
+
+## Rescanning for drift
+
+`Rescan for drift` on a repository page queues a job that re-hashes every published file and
+compares it against the database. It reports three things and **changes nothing**:
+
+| Reported | Means |
+|---|---|
+| missing from disk | A published package's file is gone; clients get a 404 |
+| not the bytes that were published | The file was replaced or corrupted after upload |
+| not published by this application | A package file nobody uploaded through the interface |
+
+Nothing is repaired automatically because each of these has two opposite right answers
+depending on how it happened — an untracked file is either a package someone meant to add or
+litter from a half-finished restore, and guessing risks deleting something nobody asked to
+lose.
+
+Generated metadata (`dists`, `repodata`, `Release`, the exported public key) is this
+application's own output and is never reported as drift. Neither is the `.incoming`
+directory, which holds part-received uploads.
+
+## Rate limiting
+
+Enabled by default and entirely in-process, which is the trade-off worth understanding:
+**limits are per instance, not cluster-wide.** Two replicas behind a proxy mean an attacker
+gets two allowances rather than unlimited ones. Sharing counters would need a store both
+replicas reach, and a Redis dependency for this is a large piece of operational surface for
+a modest gain (§15 defers multi-instance deployment for the same reason).
+
+| What | Default | Setting |
+|---|---|---|
+| Failed logins before lockout | 5, per username *and* per address | `REPOMAN_LOGIN_MAX_ATTEMPTS` |
+| Lockout duration | 15 minutes | `REPOMAN_LOGIN_LOCKOUT_SECONDS` |
+| Uploads | 20 burst, then 60/minute | `REPOMAN_UPLOAD_BURST`, `REPOMAN_UPLOAD_RATE_PER_MINUTE` |
+| Rejected API tokens | 10 burst, then 30/minute | `REPOMAN_CREDENTIAL_FAILURE_BURST`, `REPOMAN_CREDENTIAL_FAILURE_RATE_PER_MINUTE` |
+
+The first two failed logins are counted without any delay, so a mistyped password corrected
+on the next try costs nothing. After that each failure roughly doubles the wait, and past
+the threshold the key is locked out — for both the username and the source address, so
+neither can be swapped to escape the other.
+
+Only *failed* token authentications are counted, so a pipeline holding a working token never
+meets that limit however fast it goes. Uploads are counted per token or user and per
+address.
+
+Set `REPOMAN_RATE_LIMIT_ENABLED=false` if your reverse proxy already does this better. The
+client address comes from the same resolution as everything else, so **`REPOMAN_TRUSTED_PROXIES`
+must list the proxy** — without it every request appears to come from the proxy and the
+per-address limits become one shared bucket.
+
+## Metrics
+
+Off by default. `REPOMAN_METRICS_ENABLED=true` serves a Prometheus exposition at `/metrics`
+and needs the optional dependency:
+
+```sh
+pip install 'repository-manager[metrics]'
+```
+
+Asking for metrics without it is a startup failure with an actionable message, not a route
+that quietly serves nothing.
+
+**The endpoint is unauthenticated.** A scraper has no session and no token, so enabling it is
+a decision about who can reach the port. Keep it off the public listener:
+
+```nginx
+location = /metrics {
+    allow 10.0.0.0/8;      # wherever Prometheus runs
+    deny all;
+    proxy_pass http://127.0.0.1:8000;
+    include /etc/nginx/proxy_params;
+}
+```
+
+What is exported:
+
+- `repoman_requests_total`, `repoman_request_duration_seconds` — labelled by *matched route*
+  rather than path, so a caller asking for a thousand nonexistent slugs cannot mint a
+  thousand time series.
+- `repoman_job_outcomes_total`, `repoman_job_duration_seconds` — per job type and state.
+- `repoman_upload_bytes_total`.
+- `repoman_repositories`, `repoman_packages`, `repoman_jobs`, `repoman_api_tokens_live` —
+  read from the database at scrape time, so they are the same from every replica.
+
+The first three are counted in-process and reset on restart; the last four do not.
+
 ## The audit log
 
 Every change is recorded with who, what, which repository, from where, and whether it

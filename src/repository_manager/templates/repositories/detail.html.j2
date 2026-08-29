@@ -192,6 +192,9 @@
             <a href="{{ url_for('repository_variants', slug=repository.slug) }}">Manage variants</a>
           {% endif %}
         </li>
+        <li>
+          <a href="{{ url_for('repository_settings', slug=repository.slug) }}">Settings and retention</a>
+        </li>
       {% endif %}
       <li>
         <form method="post"
@@ -199,6 +202,14 @@
           {% include "partials/csrf.html.j2" %}
           <button type="submit">Regenerate metadata</button>
         </form>
+      </li>
+      <li>
+        <form method="post"
+              action="{{ url_for('repository_rescan', slug=repository.slug) }}">
+          {% include "partials/csrf.html.j2" %}
+          <button type="submit">Rescan for drift</button>
+        </form>
+        <p class="field-hint">Compares the database against the files on disk and reports what differs. Changes nothing.</p>
       </li>
     </ul>
   {% endif %}

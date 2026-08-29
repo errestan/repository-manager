@@ -1,0 +1,155 @@
+{% extends "base.html.j2" %}
+{% from "partials/tables.html.j2" import scrollable %}
+{% from "partials/forms.html.j2" import error_summary, text_field, textarea_field, select_field, radio_group %}
+{% from "partials/notice.html.j2" import notice %}
+{% block title %}
+  {% if form.errors %}Error: {% endif %}Settings — {{ repository.name }} — Repository Manager
+{% endblock %}
+{% block description %}
+  Edit a repository's name, signing key and retention policy, and remove it.
+{% endblock %}
+{% block content %}
+  <nav aria-label="Breadcrumb" class="breadcrumb">
+    <ol>
+      <li>
+        <a href="{{ url_for('repository_list') }}">Repositories</a>
+      </li>
+      <li>
+        <a href="{{ url_for('repository_detail', slug=repository.slug) }}">{{ repository.name }}</a>
+      </li>
+      <li aria-current="page">Settings</li>
+    </ol>
+  </nav>
+  <h1>{{ repository.name }} settings</h1>
+  {% if request.query_params.get('saved') %}
+    {{ notice('Saved: ' ~ request.query_params.get('saved').replace(',', ', ') ~ '. Metadata is being regenerated where it needed to be.') }}
+  {% endif %}
+  {% if request.query_params.get('unchanged') %}
+    {{ notice("Nothing was different, so nothing was changed.") }}
+  {% endif %}
+  {% if request.query_params.get('pruned') %}
+    {{ notice(request.query_params.get('pruned') ~ ' package publication(s) were pruned.') }}
+  {% endif %}
+  {% if request.query_params.get('removed') %}
+    {{ notice(request.query_params.get('removed') ~ ' was removed.') }}
+  {% endif %}
+  {{ error_summary(form) }}
+  <form method="post"
+        action="{{ url_for('repository_settings_save', slug=repository.slug) }}"
+        class="stacked-form">
+    {% include "partials/csrf.html.j2" %}
+    {{ text_field(form, 'name', 'Name', required=True,
+      hint='Shown in listings and used as the default Origin and Label.') }}
+    {{ textarea_field(form, 'description', 'Description', rows=3,
+      hint='Optional. Shown to anyone browsing this repository.') }}
+    {{ select_field(form, 'signing_key_id', 'Signing key', key_options, required=True,
+      hint='Changing this rotates the key: the old public key is removed from the repository and the metadata is re-signed. Clients must trust the new key before they next update.') }}
+    {% if repository.type.value == 'apt' %}
+      {{ text_field(form, 'origin', 'Origin',
+        hint='Written into every Release file. Defaults to the repository name.') }}
+      {{ text_field(form, 'label', 'Label',
+        hint='Written into every Release file. Defaults to the repository name.') }}
+    {% endif %}
+    {{ radio_group(form, 'retention', 'How many versions of each package should be kept?',
+      [('all', 'Keep all versions'), ('count', 'Keep the newest few')],
+      hint='Counted per package name, per architecture, per publication target.') }}
+    {{ text_field(form, 'retention_count', 'Versions to keep', type='number',
+      hint='Used only when “keep the newest few” is chosen. Lowering it does not prune anything until the next publish, or until you apply it below.') }}
+    <button type="submit" class="button-primary">Save settings</button>
+  </form>
+  <h2 id="retention">Apply retention now</h2>
+  {% if repository.retention_count == 0 %}
+    <p>
+      This repository keeps every version, so there is nothing to prune. Choose “keep the newest few”
+      above to change that.
+    </p>
+  {% elif prunable %}
+    <p class="callout">
+      <strong>{{ prunable | length }} package publication(s)</strong> are older than the newest
+      {{ repository.retention_count }} and would be removed. Clients can install them today.
+    </p>
+    {% call scrollable("Publications retention would remove") %}
+      <table class="data-table">
+        <caption>What “apply retention now” would remove.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Package</th>
+            <th scope="col">Version</th>
+            <th scope="col">Architecture</th>
+            <th scope="col">Published in</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for candidate in prunable %}
+            <tr>
+              <th scope="row">{{ candidate.name }}</th>
+              <td>
+                <code>{{ candidate.version }}</code>
+              </td>
+              <td>{{ candidate.architecture }}</td>
+              <td>{{ candidate.target }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endcall %}
+    <form method="post"
+          action="{{ url_for('repository_retention_apply', slug=repository.slug) }}">
+      {% include "partials/csrf.html.j2" %}
+      <button type="submit" class="button-danger">Remove {{ prunable | length }} old publication(s)</button>
+    </form>
+  {% else %}
+    <p>Nothing is older than the newest {{ repository.retention_count }}, so there is nothing to prune.</p>
+  {% endif %}
+  {% if repository.type.value == 'apt' %}
+    <h2 id="distributions">Distributions</h2>
+    <p>
+      A distribution can only be removed once nothing is published in it.
+      <a href="{{ url_for('repository_distributions', slug=repository.slug) }}">Add one</a>.
+    </p>
+    <ul class="action-list">
+      {% for distribution in distributions %}
+        <li>
+          <code>{{ distribution.codename }}</code>
+          <form method="post"
+                action="{{ url_for('repository_distribution_delete', slug=repository.slug, distribution_id=distribution.id) }}"
+                class="inline-form">
+            {% include "partials/csrf.html.j2" %}
+            <button type="submit" class="button-danger">
+              Remove<span class="visually-hidden"> the distribution {{ distribution.codename }}</span>
+            </button>
+          </form>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <h2 id="variants">Variants</h2>
+    <p>
+      A variant can only be removed once nothing is published in it.
+      <a href="{{ url_for('repository_variants', slug=repository.slug) }}">Add one</a>.
+    </p>
+    <ul class="action-list">
+      {% for variant in variants %}
+        <li>
+          <code>{{ variant.name }}/{{ variant.arch }}</code>
+          <form method="post"
+                action="{{ url_for('repository_variant_delete', slug=repository.slug, variant_id=variant.id) }}"
+                class="inline-form">
+            {% include "partials/csrf.html.j2" %}
+            <button type="submit" class="button-danger">
+              Remove<span class="visually-hidden"> the variant {{ variant.name }}/{{ variant.arch }}</span>
+            </button>
+          </form>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+  <h2 id="remove">Remove this repository</h2>
+  <p>
+    Deregistering takes it out of this interface. The files are left alone unless you ask for them
+    to be deleted as well.
+  </p>
+  <p>
+    <a href="{{ url_for('repository_delete_form', slug=repository.slug) }}">Deregister {{ repository.name }}…</a>
+  </p>
+{% endblock %}

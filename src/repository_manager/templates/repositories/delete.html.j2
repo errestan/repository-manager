@@ -1,0 +1,54 @@
+{% extends "base.html.j2" %}
+{% from "partials/forms.html.j2" import error_summary, text_field %}
+{% block title %}
+  {% if form.errors %}Error: {% endif %}Deregister {{ repository.name }} — Repository Manager
+{% endblock %}
+{% block description %}
+  Confirm removing a repository from this interface, and optionally deleting its files.
+{% endblock %}
+{% block content %}
+  <nav aria-label="Breadcrumb" class="breadcrumb">
+    <ol>
+      <li>
+        <a href="{{ url_for('repository_list') }}">Repositories</a>
+      </li>
+      <li>
+        <a href="{{ url_for('repository_detail', slug=repository.slug) }}">{{ repository.name }}</a>
+      </li>
+      <li aria-current="page">Deregister</li>
+    </ol>
+  </nav>
+  <h1>Deregister {{ repository.name }}?</h1>
+  {{ error_summary(form) }}
+  <p class="lede">
+    {{ repository.name }} publishes <strong>{{ packages }} package{{ '' if packages == 1 else 's' }}</strong>
+    from <code>{{ repository.root_path }}</code>.
+  </p>
+  <h2>What deregistering does</h2>
+  <ul>
+    <li>It disappears from the repository list and stops accepting uploads.</li>
+    <li>Its files stay exactly where they are, so clients pointed at it keep working.</li>
+    <li>The audit log keeps every entry that names it.</li>
+  </ul>
+  <h2>What purging adds</h2>
+  <p class="callout callout-strong" role="note">
+    Purging deletes <code>{{ repository.root_path }}</code> and everything under it: every package,
+    every index, and every signature. <strong>This cannot be undone</strong>, and any client still
+    pointed at this repository will start failing its next update.
+  </p>
+  <form method="post"
+        action="{{ url_for('repository_delete', slug=repository.slug) }}"
+        class="stacked-form">
+    {% include "partials/csrf.html.j2" %}
+    <div class="checkbox-option">
+      <input type="checkbox" id="field-purge" name="purge" value="1">
+      <label for="field-purge">Also delete the files from disk</label>
+    </div>
+    {{ text_field(form, confirmation_field, 'Type the repository identifier to confirm deletion',
+      hint='Only needed when deleting the files. Type ' ~ repository.slug ~ ' exactly.') }}
+    <div class="button-row">
+      <button type="submit" class="button-danger">Deregister {{ repository.name }}</button>
+      <a href="{{ url_for('repository_settings', slug=repository.slug) }}">Cancel</a>
+    </div>
+  </form>
+{% endblock %}

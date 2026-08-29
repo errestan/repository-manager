@@ -53,7 +53,7 @@ from repository_manager.models import (
     UploadSource,
 )
 from repository_manager.security.paths import resolve_within_roots
-from repository_manager.services import audit, publishing
+from repository_manager.services import audit, publishing, retention
 from repository_manager.services import packages as package_service
 from repository_manager.services.packages import UploadError
 from repository_manager.web.deps import (
@@ -61,8 +61,10 @@ from repository_manager.web.deps import (
     MAX_FORM_FILES,
     TokenIdentity,
     db_session,
+    get_limits,
     get_queue,
     get_settings,
+    record_upload,
     require_scope,
 )
 from repository_manager.web.middleware import client_ip
@@ -497,6 +499,7 @@ async def _chunks(upload: UploadFile) -> AsyncIterator[bytes]:
         status.HTTP_404_NOT_FOUND,
         status.HTTP_409_CONFLICT,
         HTTP_413_TOO_LARGE,
+        status.HTTP_429_TOO_MANY_REQUESTS,
     ),
 )
 # Publishing, per 5.1: the same service call the upload form makes, with the
@@ -528,6 +531,20 @@ async def package_upload(
     """
     repository = await _load(session, slug)
     settings = get_settings(request)
+
+    # Before the body is read: a pipeline over its allowance is turned away
+    # without this process spooling the package to disk first (10.3).
+    allowance = get_limits(request).upload_allowed(
+        client=client_ip(request.scope), actor=identity.owner_dn
+    )
+    if not allowance.allowed:
+        raise ApiError(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"Too many uploads. Retry in {allowance.retry_after_seconds} seconds.",
+            slug="rate-limited",
+            headers={"retry-after": str(allowance.retry_after_seconds)},
+            retry_after=allowance.retry_after_seconds,
+        )
 
     try:
         async with request.form(
@@ -589,6 +606,7 @@ async def package_upload(
     except UploadError as exc:
         raise ApiError(exc.status_code, str(exc)) from exc
 
+    record_upload(request, outcome.package.size)
     await audit.record(
         session,
         action=AuditAction.PACKAGE_UPLOAD,
@@ -608,7 +626,21 @@ async def package_upload(
     )
 
     job_id: int | None = None
+    pruned: list[retention.Pruned] = []
     if outcome.created:
+        # Pruned before the rebuild is queued, so one regeneration publishes the
+        # addition and the removals together (5.3).
+        pruned = await retention.enforce_for(
+            session, settings, repository, name=outcome.package.name
+        )
+        await retention.record(
+            session,
+            repository,
+            pruned,
+            actor=identity.owner_dn,
+            actor_type=ActorType.TOKEN,
+            source_ip=client_ip(request.scope),
+        )
         job_id = await publishing.request_regeneration(session, queue, repository)
     else:
         # Nothing changed on disk, so there is nothing to rebuild.  Reported as
@@ -619,6 +651,7 @@ async def package_upload(
         package=PackageOut.of(outcome.package.publications[-1], target=label),
         created=outcome.created,
         job_id=job_id,
+        pruned=[entry.summary for entry in pruned],
     )
     # Commit before waking a worker: the job row has to be visible to the other
     # connection that will claim it.

@@ -701,3 +701,27 @@ button:hover {
   color: var(--text-muted);
   border: 1px solid var(--border);
 }
+
+/* ------------------------------------------------------------- destructive actions */
+
+/* A submit and a cancel link on one line, with the cancel far enough from the
+   button that a mis-click lands on neither. */
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space);
+  margin-top: var(--space);
+}
+
+/* An inline remove button inside a list item, next to what it removes. */
+.action-list .inline-form {
+  margin-left: 0.5rem;
+}
+
+/* The version in the footer: present for a bug report, quiet for everyone else. */
+.version {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9375em;
+}

@@ -50,6 +50,7 @@ TITLES: dict[int, str] = {
     HTTP_413_TOO_LARGE: "Upload too large",
     status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: "Unsupported media type",
     HTTP_422_UNPROCESSABLE: "Request could not be processed",
+    status.HTTP_429_TOO_MANY_REQUESTS: "Too many requests",
     status.HTTP_500_INTERNAL_SERVER_ERROR: "Internal error",
     status.HTTP_503_SERVICE_UNAVAILABLE: "Service unavailable",
 }
@@ -62,6 +63,7 @@ SLUGS: dict[int, str] = {
     status.HTTP_404_NOT_FOUND: "not-found",
     status.HTTP_409_CONFLICT: "conflict",
     HTTP_413_TOO_LARGE: "upload-too-large",
+    status.HTTP_429_TOO_MANY_REQUESTS: "rate-limited",
     status.HTTP_503_SERVICE_UNAVAILABLE: "unavailable",
 }
 

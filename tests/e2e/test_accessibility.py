@@ -396,3 +396,58 @@ def test_the_api_reference_needs_no_remote_assets(page: Page, live_server: str) 
     page.goto(f"{live_server}/api/docs")
     expect(page.locator("h1")).to_have_text("REST API")
     assert not external, external
+
+
+def test_a_destructive_button_says_what_it_removes(signed_in: Page, live_server: str) -> None:
+    """ "Remove" alone is ambiguous when there are several; each names its target (11)."""
+    signed_in.goto(f"{live_server}/repositories/internal/settings")
+    remove = signed_in.get_by_role("button", name="Remove the distribution bookworm")
+    expect(remove).to_be_visible()
+
+
+def test_the_purge_warning_is_announced_not_merely_coloured(
+    signed_in: Page, live_server: str
+) -> None:
+    signed_in.goto(f"{live_server}/repositories/internal/delete")
+    warning = signed_in.locator('[role="note"]')
+    expect(warning).to_contain_text("cannot be undone")
+
+
+def test_purging_cannot_be_done_by_a_single_click(signed_in: Page, live_server: str) -> None:
+    """The irreversible half asks for the identifier to be typed (8.1)."""
+    signed_in.goto(f"{live_server}/repositories/internal/delete")
+    signed_in.check("#field-purge")
+    signed_in.get_by_role("button", name="Deregister Internal APT").click()
+
+    expect(signed_in.locator(".error-summary")).to_contain_text("Type internal exactly")
+
+
+def test_no_page_uses_a_positive_tabindex(page: Page, pages: list[str]) -> None:
+    """A positive tabindex reorders the whole document, not just itself (11)."""
+    for url in pages:
+        page.goto(url)
+        offenders = page.eval_on_selector_all(
+            "[tabindex]",
+            "nodes => nodes.map(n => n.getAttribute('tabindex')).filter(v => Number(v) > 0)",
+        )
+        assert offenders == [], f"{url} has a positive tabindex: {offenders}"
+
+
+def test_every_page_has_exactly_one_h1(page: Page, pages: list[str]) -> None:
+    for url in pages:
+        page.goto(url)
+        assert page.locator("h1").count() == 1, url
+
+
+def test_animation_is_suppressed_when_motion_is_reduced(browser: Browser, live_server: str) -> None:
+    """Not merely declared in a stylesheet -- read back from the rendered page (11)."""
+    context = browser.new_context(reduced_motion="reduce")
+    page = context.new_page()
+    page.goto(f"{live_server}/")
+    durations = page.eval_on_selector_all(
+        "*",
+        "nodes => nodes.map(n => getComputedStyle(n).transitionDuration)"
+        ".filter(d => d && d !== '0s' && parseFloat(d) > 0.01)",
+    )
+    context.close()
+    assert durations == [], durations

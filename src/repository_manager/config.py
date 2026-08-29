@@ -196,6 +196,30 @@ class Settings(BaseSettings):
     # long enough that renewing it is not a weekly chore.
     token_default_lifetime_days: int = Field(default=90, gt=0)
 
+    # -- rate limiting (10.3) ----------------------------------------------
+    # Per instance, not cluster-wide; two replicas behind a proxy mean an
+    # attacker gets two allowances rather than unlimited ones, which is the
+    # documented trade rather than an oversight.
+    rate_limit_enabled: bool = True
+    #: Consecutive failed logins, per username *and* per source address, before
+    #: that key is locked out rather than merely slowed.
+    login_max_attempts: int = Field(default=5, gt=0)
+    login_lockout_seconds: int = Field(default=900, gt=0)
+    #: Uploads: a burst allowance plus a sustained rate.  A CI job publishing a
+    #: dozen packages in a row is normal traffic, so the burst has to admit it.
+    upload_burst: int = Field(default=20, gt=0)
+    upload_rate_per_minute: int = Field(default=60, gt=0)
+    #: Rejected API tokens, bounded separately so a credential guesser and a
+    #: busy pipeline cannot exhaust each other's allowance.
+    credential_failure_burst: int = Field(default=10, gt=0)
+    credential_failure_rate_per_minute: int = Field(default=30, gt=0)
+
+    # -- observability (13.3) ----------------------------------------------
+    # Off by default: the endpoint is unauthenticated by design (a scraper is
+    # not a user), so publishing it is a deployment decision rather than
+    # something that should happen to anyone who upgrades.
+    metrics_enabled: bool = False
+
     # -- REST API (8.2) ----------------------------------------------------
     # The OpenAPI schema and the reference page it feeds.  Both are anonymous
     # reads describing endpoints that are themselves anonymous or token-gated,

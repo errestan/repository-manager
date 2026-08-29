@@ -202,12 +202,18 @@ def maintainer_client(manageable_app: FastAPI) -> Iterator[TestClient]:
 
 
 @pytest.fixture
-def apt_repository(sync_session: Session) -> Repository:
+def apt_repository(sync_session: Session, repository_root: Path) -> Repository:
+    """A registered APT repository with no files on disk.
+
+    The root is inside the allowed roots even though nothing is written there.
+    A path outside them would work for every test that only reads rows and then
+    fail, confusingly, for the first one that reaches the filesystem.
+    """
     repository = Repository(
         slug="internal",
         name="Internal APT",
         type=RepositoryType.APT,
-        root_path="/tmp/internal",
+        root_path=str(repository_root / "internal"),
         retention_count=3,
         description="Company-built Debian packages",
     )
@@ -225,12 +231,12 @@ def apt_repository(sync_session: Session) -> Repository:
 
 
 @pytest.fixture
-def rpm_repository(sync_session: Session) -> Repository:
+def rpm_repository(sync_session: Session, repository_root: Path) -> Repository:
     repository = Repository(
         slug="el9",
         name="Enterprise Linux 9",
         type=RepositoryType.RPM,
-        root_path="/tmp/el9",
+        root_path=str(repository_root / "el9"),
         retention_count=0,
     )
     repository.variants.append(RpmVariant(name="el9", arch="x86_64"))
