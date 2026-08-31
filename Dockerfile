@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --------------------------------------------------------------------- builder
-FROM python:3.13-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
@@ -21,7 +21,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --extra postgres --extra metrics
 
 # --------------------------------------------------------------------- runtime
-FROM python:3.13-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 
 # createrepo-c generates RPM metadata (AD-2); gnupg signs repository metadata
 # (AD-6). Neither can be installed by pip, which is why this image exists.
