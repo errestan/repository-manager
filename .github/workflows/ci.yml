@@ -21,9 +21,9 @@ jobs:
     name: Lint, types and licences
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -48,9 +48,9 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -66,7 +66,7 @@ jobs:
 
       - name: Upload coverage
         if: matrix.python-version == '3.13'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.xml
@@ -94,7 +94,7 @@ jobs:
           # supposed to seed, so the tests create the groups they need from the
           # two user entries, which the image does reliably provide.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # createrepo_c generates RPM metadata; apt/dnf are what actually prove the
       # generated repositories are valid (AD-2). These are the point of this job.
@@ -112,7 +112,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             createrepo-c gnupg dpkg-dev apt-utils dnf rpm zstd
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -146,9 +146,9 @@ jobs:
         # sub-path. Running the whole suite twice is what keeps that from regressing.
         mount: ["", "/repoman"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -168,7 +168,7 @@ jobs:
 
       - name: Upload report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-${{ matrix.mount == '' && 'root' || 'subpath' }}
           path: |
